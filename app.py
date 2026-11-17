@@ -12,24 +12,11 @@ st.set_page_config(
 @st.cache_resource
 def get_global_room():
     return {
-        "modalita_attiva": "Singolo Discente",  # "Singolo Discente", "Arena 2 Squadre", "Coppie / Team"
+        "modalita_attiva": "Singolo Discente",  # "Singolo Discente" | "Gruppi / Squadre"
         "caso_attivo_globale": None,
-        # Configurazione Arena 2 Squadre
-        "nome_squadra_a": "Squadra Urologi",
-        "membri_squadra_a": ["001", "002", "003", "004", "005", "006"],
-        "nome_squadra_b": "Squadra Oncologi",
-        "membri_squadra_b": ["007", "008", "009", "010", "011", "012"],
-        # Configurazione Coppie / Team (es. {"Ospedale A": ["001", "007"], ...})
-        "coppie": {
-            "Team 1 (Ospedale A)": ["001", "007"],
-            "Team 2 (Ospedale B)": ["002", "008"],
-            "Team 3 (Ospedale C)": ["003", "009"],
-            "Team 4 (Ospedale D)": ["004", "010"],
-            "Team 5 (Ospedale E)": ["005", "011"],
-            "Team 6 (Ospedale F)": ["006", "012"],
-            "Team 7 (Ospedale G)": ["013", "014"],
-        },
-        # Stati condivisi dei casi clinici indicizzati per (caso_id, chiave_sessione)
+        # Dizionario libero: {"Nome Gruppo": ["001", "003", ...]}
+        "gruppi_personalizzati": {},
+        # Stati condivisi dei casi clinici indicizzati per "{caso_id}__{chiave_sessione}"
         "stati_casi": {},
     }
 
@@ -89,7 +76,11 @@ def login_screen():
                     else:
                         st.error("Password Docente Master errata.")
                 else:
-                    codice_norm = username_input.zfill(3) if username_input.isdigit() else username_input
+                    codice_norm = (
+                        username_input.zfill(3)
+                        if username_input.isdigit()
+                        else username_input
+                    )
                     if codice_norm in DISCENTI_VALIDI:
                         if password_input == "12345678":
                             st.session_state.authenticated = True
@@ -99,7 +90,9 @@ def login_screen():
                         else:
                             st.error("Password errata (Default discenti: 12345678).")
                     else:
-                        st.error("Codice non valido. Usa 001-014 oppure le credenziali Master.")
+                        st.error(
+                            "Codice non valido. Usa 001-014 oppure le credenziali Master."
+                        )
 
 
 if not st.session_state.authenticated:
@@ -108,33 +101,20 @@ if not st.session_state.authenticated:
 
 
 # ---------------------------------------------------------------------------
-# 3. FUNZIONE DI RISOLUZIONE DEL GRUPPO / SQUADRA PER L'UTENTE CONNESSO
+# 3. RISOLUZIONE IDENTITÀ DI GIOCO (SINGOLO vs GRUPPO PERSONALIZZATO)
 # ---------------------------------------------------------------------------
 def risolvi_identita_gioco(role, uid):
-    modalita = room["modalita_attiva"]
-
     if role == "master":
         return f"master_{uid}", f"Control Room ({uid})"
 
-    if modalita == "Singolo Discente":
-        return f"singolo_{uid}", f"Discente {uid} (Individuale)"
-
-    elif modalita == "Arena 2 Squadre":
-        if uid in room["membri_squadra_a"]:
-            return "arena_squadra_a", f"{room['nome_squadra_a']} (ID {uid})"
-        elif uid in room["membri_squadra_b"]:
-            return "arena_squadra_b", f"{room['nome_squadra_b']} (ID {uid})"
-        else:
-            return f"singolo_{uid}", f"Discente {uid} (Non assegnato a squadra)"
-
-    elif modalita == "Coppie / Team":
-        for nome_team, membri in room["coppie"].items():
+    if room["modalita_attiva"] == "Gruppi / Squadre":
+        for nome_gruppo, membri in room["gruppi_personalizzati"].items():
             if uid in membri:
-                chiave = f"team_{nome_team.lower().replace(' ', '_')}"
-                return chiave, f"{nome_team} (ID {uid})"
-        return f"singolo_{uid}", f"Discente {uid} (Non assegnato a coppia)"
+                slug = "".join(c if c.isalnum() else "_" for c in nome_gruppo.lower())
+                return f"gruppo_{slug}", f"{nome_gruppo} (ID {uid})"
+        return f"singolo_{uid}", f"Discente {uid} (Non assegnato ad alcun gruppo)"
 
-    return f"singolo_{uid}", f"Discente {uid}"
+    return f"singolo_{uid}", f"Discente {uid} (Individuale)"
 
 
 session_bucket, etichetta_utente = risolvi_identita_gioco(
@@ -147,7 +127,9 @@ session_bucket, etichetta_utente = risolvi_identita_gioco(
 CASE_DIR = "casi_clinici"
 if not os.path.exists(CASE_DIR):
     os.makedirs(CASE_DIR)
-    st.warning(f"Cartella '{CASE_DIR}/' creata. Inserisci i file dei casi (es. 001.py).")
+    st.warning(
+        f"Cartella '{CASE_DIR}/' creata. Inserisci i file dei casi (es. 001.py)."
+    )
     st.stop()
 
 case_files = sorted(
@@ -159,7 +141,7 @@ if not case_files:
     st.stop()
 
 # ---------------------------------------------------------------------------
-# 5. SIDEBAR & PANNELLO REGIA MASTER (ACCOPPIAMENTI E MODALITÀ)
+# 5. SIDEBAR & REGIA MASTER (COSTRUTTORE LIBERO DI GRUPPI / SQUADRE)
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.markdown(f"### 👤 **{etichetta_utente}**")
@@ -178,7 +160,6 @@ with st.sidebar:
 
     st.divider()
 
-    # Selettore Caso Clinico
     default_idx = 0
     if room["caso_attivo_globale"] in case_files:
         default_idx = case_files.index(room["caso_attivo_globale"])
@@ -190,19 +171,19 @@ with st.sidebar:
         format_func=lambda x: f"Caso {x}",
     )
 
-    # PANNELLO DI CONFIGURAZIONE SQUADRE RISERVATO AI 3 MASTER
+    # REGIA RISERVATA AI 3 MASTER
     if st.session_state.user_role == "master":
         st.divider()
-        st.markdown("### 🎛️ Regia Master (Aula)")
+        st.markdown("### 🎛️ Regia Master")
 
-        if st.button("📌 Imposta questo caso per tutta l'aula", use_container_width=True):
+        if st.button("📌 Sincronizza caso per tutta l'aula", use_container_width=True):
             room["caso_attivo_globale"] = selected_case_id
-            st.success(f"Caso {selected_case_id} sincronizzato!")
+            st.success(f"Caso {selected_case_id} impostato per l'aula!")
 
         nuova_mod = st.radio(
-            "Modalità di Lavoro Aula:",
-            ["Singolo Discente", "Arena 2 Squadre", "Coppie / Team"],
-            index=["Singolo Discente", "Arena 2 Squadre", "Coppie / Team"].index(
+            "Modalità Sessione:",
+            ["Singolo Discente", "Gruppi / Squadre"],
+            index=["Singolo Discente", "Gruppi / Squadre"].index(
                 room["modalita_attiva"]
             ),
         )
@@ -210,50 +191,80 @@ with st.sidebar:
             room["modalita_attiva"] = nuova_mod
             st.rerun()
 
-        # Configurazione Arena 2 Squadre
-        if room["modalita_attiva"] == "Arena 2 Squadre":
-            with st.expander("⚔️ Configura 2 Squadre Arena", expanded=True):
-                room["nome_squadra_a"] = st.text_input(
-                    "Nome Squadra A", value=room["nome_squadra_a"]
-                )
-                room["membri_squadra_a"] = st.multiselect(
-                    "Partecipanti Squadra A",
+        if room["modalita_attiva"] == "Gruppi / Squadre":
+            with st.expander("🧩 Costruttore Libero Gruppi", expanded=True):
+                # Crea nuovo gruppo
+                nome_nuovo = st.text_input(
+                    "Nome nuovo gruppo / squadra",
+                    placeholder="es. Urologi, Oncologi, Osp. X...",
+                ).strip()
+                membri_nuovi = st.multiselect(
+                    "Seleziona partecipanti (001-014)",
                     DISCENTI_VALIDI,
-                    default=[m for m in room["membri_squadra_a"] if m in DISCENTI_VALIDI],
+                    key="ms_nuovo_gruppo",
                 )
-                room["nome_squadra_b"] = st.text_input(
-                    "Nome Squadra B", value=room["nome_squadra_b"]
-                )
-                disponibili_b = [d for d in DISCENTI_VALIDI if d not in room["membri_squadra_a"]]
-                room["membri_squadra_b"] = st.multiselect(
-                    "Partecipanti Squadra B",
-                    disponibili_b,
-                    default=[m for m in room["membri_squadra_b"] if m in disponibili_b],
-                )
+                if st.button("➕ Crea / Aggiungi Gruppo", use_container_width=True):
+                    if not nome_nuovo:
+                        st.warning("Inserisci un nome per il gruppo.")
+                    else:
+                        # Rimuove eventuali utenti già assegnati ad altri gruppi per evitare conflitti
+                        for g in room["gruppi_personalizzati"]:
+                            room["gruppi_personalizzati"][g] = [
+                                u
+                                for u in room["gruppi_personalizzati"][g]
+                                if u not in membri_nuovi
+                            ]
+                        room["gruppi_personalizzati"][nome_nuovo] = sorted(membri_nuovi)
+                        st.rerun()
 
-        # Configurazione Coppie / Team Ospedalieri
-        elif room["modalita_attiva"] == "Coppie / Team":
-            with st.expander("🤝 Configura Coppie / Team", expanded=True):
-                nomi_team = list(room["coppie"].keys())
-                team_edit = st.selectbox("Seleziona Team da modificare", nomi_team)
-                nuovo_nome_team = st.text_input("Rinomina Team", value=team_edit)
-                membri_attuali = [m for m in room["coppie"][team_edit] if m in DISCENTI_VALIDI]
-                nuovi_membri = st.multiselect(
-                    "Membri del Team (codici 001-014)",
-                    DISCENTI_VALIDI,
-                    default=membri_attuali,
-                )
-                if st.button("Salva Team", use_container_width=True):
-                    if nuovo_nome_team != team_edit:
-                        del room["coppie"][team_edit]
-                    room["coppie"][nuovo_nome_team] = nuovi_membri
-                    st.success(f"Salvato {nuovo_nome_team}: {', '.join(nuovi_membri)}")
-                    st.rerun()
+                # Modifica o elimina gruppi esistenti
+                if room["gruppi_personalizzati"]:
+                    st.divider()
+                    st.markdown("**Gruppi Attivi:**")
+                    for g_nome in list(room["gruppi_personalizzati"].keys()):
+                        membri_g = room["gruppi_personalizzati"][g_nome]
+                        st.markdown(
+                            f"**{g_nome}**: `{', '.join(membri_g) if membri_g else 'nessun membro'}`"
+                        )
+                        c_edit, c_del = st.columns([3, 1])
+                        with c_edit:
+                            aggiornati = st.multiselect(
+                                f"Modifica {g_nome}",
+                                DISCENTI_VALIDI,
+                                default=[m for m in membri_g if m in DISCENTI_VALIDI],
+                                key=f"edit_{g_nome}",
+                                label_visibility="collapsed",
+                            )
+                            if sorted(aggiornati) != sorted(membri_g):
+                                for altro_g in room["gruppi_personalizzati"]:
+                                    if altro_g != g_nome:
+                                        room["gruppi_personalizzati"][altro_g] = [
+                                            u
+                                            for u in room["gruppi_personalizzati"][altro_g]
+                                            if u not in aggiornati
+                                        ]
+                                room["gruppi_personalizzati"][g_nome] = sorted(aggiornati)
+                                st.rerun()
+                        with c_del:
+                            if st.button("🗑️", key=f"del_{g_nome}", help=f"Elimina {g_nome}"):
+                                del room["gruppi_personalizzati"][g_nome]
+                                st.rerun()
 
-                nuovo_gruppo = st.text_input("Oppure crea nuovo Team", placeholder="es. Ospedale San Martino")
-                if st.button("➕ Aggiungi Team", use_container_width=True) and nuovo_gruppo.strip():
-                    room["coppie"][nuovo_gruppo.strip()] = []
-                    st.rerun()
+                    # Mostra partecipanti non ancora assegnati
+                    assegnati = {
+                        u
+                        for m_list in room["gruppi_personalizzati"].values()
+                        for u in m_list
+                    }
+                    liberi = [d for d in DISCENTI_VALIDI if d not in assegnati]
+                    if liberi:
+                        st.caption(f"Non assegnati: {', '.join(liberi)}")
+                    else:
+                        st.caption("Tutti i 14 partecipanti sono assegnati.")
+
+                    if st.button("🧹 Svuota tutti i gruppi", use_container_width=True):
+                        room["gruppi_personalizzati"] = {}
+                        st.rerun()
 
 # ---------------------------------------------------------------------------
 # 6. CARICAMENTO MODULO CASO E STATO CONDIVISO DEL GRUPPO
@@ -304,7 +315,6 @@ with col_left:
     m2.metric("Controllo Onc.", f"{max(0, min(100, state['oncologico']))}%")
     m3.metric("Qualità di Vita", f"{max(0, min(100, state['qol']))}%")
 
-    # Vista live per i Master sull'andamento di tutte le squadre/coppie attive
     if st.session_state.user_role == "master":
         with st.expander("📡 Monitor Live Aula & Debug Nodo", expanded=True):
             st.write(f"**Nodo attuale:** `{state['current_node']}`")
@@ -319,9 +329,13 @@ with col_left:
                 st.rerun()
 
             st.divider()
-            st.markdown("**Stato Squadre / Utenti su questo caso:**")
+            st.markdown("**Avanzamento Gruppi / Utenti su questo caso:**")
             prefisso = f"{selected_case_id}__"
-            attivi = {k[len(prefisso):]: v for k, v in room["stati_casi"].items() if k.startswith(prefisso)}
+            attivi = {
+                k[len(prefisso) :]: v
+                for k, v in room["stati_casi"].items()
+                if k.startswith(prefisso)
+            }
             for gruppo, st_grp in attivi.items():
                 st.caption(
                     f"• **{gruppo}** → `{st_grp['current_node']}` | Vit {st_grp['vitalita']}% | Onc {st_grp['oncologico']}% | QoL {st_grp['qol']}%"
