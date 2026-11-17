@@ -1,5 +1,6 @@
 import importlib
 import os
+import random
 import streamlit as st
 from case_builder import render_case_builder
 from font import apply_fonts
@@ -60,6 +61,7 @@ if chiave not in room["stati_casi"]:
         "oncologico": caso.get("oncologico_iniziale", 100),
         "qol": caso.get("qol_iniziale", 75),
         "percorso": [],
+        "ordine_opzioni": {},  # Salva l'ordine randomizzato per ogni snodo
     }
 state = room["stati_casi"][chiave]
 
@@ -77,7 +79,7 @@ with col_l:
     if role == "master":
         with st.expander("📡 Monitor Live & Debug", expanded=True):
             nodi = list(caso["nodi"].keys()) + list(caso["esiti"].keys())
-            salto = st.selectbox("Salta nodo:", nodi, index=nodi.index(state["current_node"]))
+            salto = st.selectbox("Salta nodo:", nodi, index=nodi.index(state["current_node"]) if state["current_node"] in nodi else 0)
             if st.button("Vai al nodo", use_container_width=True):
                 state["current_node"] = salto
                 st.rerun()
@@ -88,26 +90,63 @@ with col_l:
 
 with col_r:
     nid = state["current_node"]
-    if nid in caso["nodi"]:
+
+    # Controllo automatico exitus clinico se Vitalità <= 0 in qualsiasi punto
+    if state["vitalita"] <= 0 and nid not in caso["esiti"]:
+        esito_morte = caso["esiti"].get(
+            "esito_exitus",
+            {
+                "tipo": "rosso",
+                "titolo": "💀 EXITUS CLINICO — VITALITÀ A 0%",
+                "sottotitolo": '"La somma delle complicanze non ha lasciato margine."',
+                "descrizione": "Le scelte cliniche accumulate hanno portato a tossicità fatale o progressione sistemica irreversibile prima di completare il percorso terapeutico.",
+            },
+        )
+        st.markdown(render_box_esito(esito_morte), unsafe_allow_html=True)
+        for idx, step in enumerate(state["percorso"], 1):
+            st.markdown(f"**{idx}. {step['nodo']}** → `{step['scelta']}`")
+        if st.button("🔄 Ripeti Caso", use_container_width=True):
+            del room["stati_casi"][chiave]
+            st.rerun()
+
+    elif nid in caso["nodi"]:
         nodo = caso["nodi"][nid]
         st.markdown(f"### {nodo['titolo']}")
         st.write(nodo["testo"])
         if nodo.get("immagine") and os.path.exists(nodo["immagine"]):
             st.image(nodo["immagine"], use_container_width=True)
 
+        # Mescola l'ordine delle opzioni una sola volta per questo nodo/utente
+        if nid not in state["ordine_opzioni"]:
+            indici = list(range(len(nodo["opzioni"])))
+            random.shuffle(indici)
+            state["ordine_opzioni"][nid] = indici
+
+        opzioni_ordinate = [nodo["opzioni"][i] for i in state["ordine_opzioni"][nid]]
+
         with st.form(f"f_{chiave}_{nid}"):
-            scelta = st.radio("Condotta clinica:", [o["testo"] for o in nodo["opzioni"]])
+            scelta = st.radio("Condotta clinica:", [o["testo"] for o in opzioni_ordinate])
             if st.form_submit_button("Conferma Scelta ➡️", use_container_width=True):
-                opt = next(o for o in nodo["opzioni"] if o["testo"] == scelta)
-                state["vitalita"] += opt.get("d_vit", 0)
-                state["oncologico"] += opt.get("d_onc", 0)
-                state["qol"] += opt.get("d_qol", 0)
+                opt = next(o for o in opzioni_ordinate if o["testo"] == scelta)
+                state["vitalita"] = max(0, min(100, state["vitalita"] + opt.get("d_vit", 0)))
+                state["oncologico"] = max(0, min(100, state["oncologico"] + opt.get("d_onc", 0)))
+                state["qol"] = max(0, min(100, state["qol"] + opt.get("d_qol", 0)))
                 state["percorso"].append({"nodo": nodo["titolo"], "scelta": opt["testo"]})
                 state["current_node"] = opt["next"]
                 st.rerun()
 
     elif nid in caso["esiti"]:
-        st.markdown(render_box_esito(caso["esiti"][nid]), unsafe_allow_html=True)
+        esito = dict(caso["esiti"][nid])
+        # Declassamento automatico se si arriva all'esito finale ma con danni gravi accumulati
+        if esito.get("tipo") == "bianco" and (state["qol"] < 55 or state["oncologico"] < 65 or state["vitalita"] < 60):
+            esito = {
+                "tipo": "giallo",
+                "titolo": "⚠️ CONTROLLO ONCOLOGICO CON SEQUELE GRAVI",
+                "sottotitolo": '"Hai indovinato la mossa finale, ma il paziente paga gli errori precedenti."',
+                "descrizione": esito["descrizione"] + " Tuttavia, le scelte subottimali nelle fasi iniziali hanno lasciato sequele permanenti sulla qualità di vita o sul controllo di malattia.",
+            }
+
+        st.markdown(render_box_esito(esito), unsafe_allow_html=True)
         for idx, step in enumerate(state["percorso"], 1):
             st.markdown(f"**{idx}. {step['nodo']}** → `{step['scelta']}`")
         if st.button("🔄 Ripeti Caso", use_container_width=True):
