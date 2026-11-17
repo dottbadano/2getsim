@@ -6,6 +6,7 @@ from case_builder import render_case_builder
 from font import apply_fonts
 from security import render_regia_master, risolvi_identita_gioco, verifica_accesso
 from text import render_box_esito
+from valutazione import render_osservatorio_master
 
 st.set_page_config(page_title="2getSIM", page_icon="⚡", layout="wide")
 apply_fonts()
@@ -19,7 +20,6 @@ cases = sorted([f[:-3] for f in os.listdir(CASE_DIR) if f.endswith(".py") and f 
 
 
 def get_case_label(case_id):
-    """Restituisce solo il codice '001' ai discenti; aggiunge la descrizione clinica ai Master."""
     if role != "master":
         return case_id
     try:
@@ -30,28 +30,23 @@ def get_case_label(case_id):
         return case_id
 
 
-def _calcola_costo_opzione(opt):
-    """Restituisce il costo esplicito dell'opzione oppure lo stima dai delta clinici/colore."""
-    if "costo" in opt:
-        return int(opt["costo"])
-    colore = opt.get("colore")
-    if colore == "verde":
-        return 1200
-    if colore == "blu":
-        return 3500
-    if colore == "giallo":
-        return 8500
-    if colore == "rosso":
-        return 14000
-    # Fallback automatico per file scritti senza campo 'colore'
+def _deduci_colore_opzione(opt):
+    if opt.get("colore") in ("verde", "blu", "giallo", "rosso"):
+        return opt["colore"]
     do, dv, dq = opt.get("d_onc", 0), opt.get("d_vit", 0), opt.get("d_qol", 0)
     if do > 0 and dv >= 0:
-        return 1200
+        return "verde"
     if dq <= -20 and do >= -15:
-        return 8500
+        return "giallo"
     if dv <= -15 or do <= -25:
-        return 14000
-    return 3500
+        return "rosso"
+    return "blu"
+
+
+def _calcola_costo_opzione(opt):
+    if "costo" in opt:
+        return int(opt["costo"])
+    return {"verde": 1200, "blu": 3500, "giallo": 8500, "rosso": 14000}[_deduci_colore_opzione(opt)]
 
 
 with st.sidebar:
@@ -66,7 +61,10 @@ with st.sidebar:
 
     vista_master = "🎮 Simulazione Aula"
     if role == "master":
-        vista_master = st.radio("Vista Docente:", ["🎮 Simulazione Aula", "✍️ Crea Caso Clinico"])
+        vista_master = st.radio(
+            "Vista Docente:",
+            ["🎮 Simulazione Aula", "🧠 Osservatorio Errori & Gruppi", "✍️ Crea Caso Clinico"],
+        )
         st.divider()
 
     if cases:
@@ -80,6 +78,10 @@ with st.sidebar:
 
 if role == "master" and vista_master == "✍️ Crea Caso Clinico":
     render_case_builder(CASE_DIR)
+    st.stop()
+
+if role == "master" and vista_master == "🧠 Osservatorio Errori & Gruppi":
+    render_osservatorio_master(room)
     st.stop()
 
 if not selected_id:
@@ -172,7 +174,6 @@ with col_l:
 with col_r:
     nid = state["current_node"]
 
-    # 1. Controllo automatico Exitus se Vitalità <= 0
     if state["vitalita"] <= 0 and nid not in caso["esiti"]:
         esito_morte = caso["esiti"].get(
             "esito_exitus",
@@ -191,7 +192,6 @@ with col_r:
             st.session_state[anamnesi_open_key] = False
             st.rerun()
 
-    # 2. Controllo automatico Progressione Incontrollata se Controllo Oncologico <= 0
     elif state["oncologico"] <= 0 and nid not in caso["esiti"]:
         esito_prog = caso["esiti"].get(
             "esito_progressione",
@@ -210,7 +210,6 @@ with col_r:
             st.session_state[anamnesi_open_key] = False
             st.rerun()
 
-    # 3. Controllo automatico Drop-out / Rifiuto delle cure se QoL < 30%
     elif state["qol"] < 30 and nid not in caso["esiti"]:
         esito_dropout = caso["esiti"].get(
             "esito_dropout",
@@ -229,7 +228,6 @@ with col_r:
             st.session_state[anamnesi_open_key] = False
             st.rerun()
 
-    # 4. Snodo decisionale attivo
     elif nid in caso["nodi"]:
         nodo = caso["nodi"][nid]
         st.markdown(f"### {nodo['titolo']}")
@@ -248,16 +246,24 @@ with col_r:
             scelta = st.radio("Condotta clinica:", [o["testo"] for o in opzioni_ordinate])
             if st.form_submit_button("Conferma Scelta ➡️", use_container_width=True):
                 opt = next(o for o in opzioni_ordinate if o["testo"] == scelta)
+                col_scelta = _deduci_colore_opzione(opt)
                 state["vitalita"] = max(0, min(100, state["vitalita"] + opt.get("d_vit", 0)))
                 state["oncologico"] = max(0, min(100, state["oncologico"] + opt.get("d_onc", 0)))
                 state["qol"] = max(0, min(100, state["qol"] + opt.get("d_qol", 0)))
                 state["spesa_ssn"] = state.get("spesa_ssn", 0) + _calcola_costo_opzione(opt)
-                state["percorso"].append({"nodo": nodo["titolo"], "scelta": opt["testo"]})
+                state["percorso"].append(
+                    {
+                        "nodo_id": nid,
+                        "nodo": nodo["titolo"],
+                        "scelta": opt["testo"],
+                        "colore": col_scelta,
+                        "anamnesi_aperta": st.session_state[anamnesi_open_key],
+                    }
+                )
                 state["current_node"] = opt["next"]
                 st.session_state[anamnesi_open_key] = False
                 st.rerun()
 
-    # 5. Esito finale raggiunto al termine del percorso
     elif nid in caso["esiti"]:
         esito = dict(caso["esiti"][nid])
         if esito.get("tipo") == "bianco" and (state["qol"] < 55 or state["oncologico"] < 65 or state["vitalita"] < 60):
