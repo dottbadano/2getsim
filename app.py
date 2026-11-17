@@ -1,6 +1,7 @@
 import importlib
 import os
 import random
+import time
 import streamlit as st
 from case_builder import render_case_builder
 from font import apply_fonts
@@ -49,6 +50,76 @@ def _calcola_costo_opzione(opt):
     return {"verde": 1200, "blu": 3500, "giallo": 8500, "rosso": 14000}[_deduci_colore_opzione(opt)]
 
 
+def _is_terminato(stato_run, caso_dict):
+    """Restituisce True se la postazione ha già raggiunto un esito finale o un blocco automatico."""
+    nid = stato_run.get("current_node", "")
+    if nid in caso_dict.get("esiti", {}):
+        return True
+    if stato_run.get("vitalita", 100) <= 0:
+        return True
+    if stato_run.get("oncologico", 100) <= 0:
+        return True
+    if stato_run.get("qol", 75) < 30:
+        return True
+    return False
+
+
+def _applica_scelta_in_coda(stato_run):
+    """Applica definitivamente la scelta prenotata allo stato del paziente quando tutti hanno votato."""
+    pending = stato_run.pop("scelta_pendente", None)
+    if not pending:
+        return
+    opt = pending["opt"]
+    col_scelta = _deduci_colore_opzione(opt)
+    stato_run["vitalita"] = max(0, min(100, stato_run["vitalita"] + opt.get("d_vit", 0)))
+    stato_run["oncologico"] = max(0, min(100, stato_run["oncologico"] + opt.get("d_onc", 0)))
+    stato_run["qol"] = max(0, min(100, stato_run["qol"] + opt.get("d_qol", 0)))
+    stato_run["spesa_ssn"] = stato_run.get("spesa_ssn", 0) + _calcola_costo_opzione(opt)
+    stato_run["percorso"].append(
+        {
+            "nodo_id": pending["nodo_id"],
+            "nodo": pending["nodo_titolo"],
+            "scelta": opt["testo"],
+            "colore": col_scelta,
+            "anamnesi_aperta": pending["anamnesi_aperta"],
+        }
+    )
+    stato_run["current_node"] = opt["next"]
+
+
+def _sincronizza_barriera_aula(room, selected_id, caso_dict, forzata=False):
+    """Controlla se tutti i partecipanti attivi sullo stesso passo hanno votato; in tal caso sblocca tutti."""
+    pref = f"{selected_id}__"
+    attivi = []
+    for k, v in room.get("stati_casi", {}).items():
+        if not k.startswith(pref):
+            continue
+        entita = k[len(pref):]
+        # Esclude i Master di regia dalla barriera dei votanti
+        if entita.lower() in ("gbadano", "acavo", "smigone") or entita.lower().startswith("master"):
+            continue
+        if not _is_terminato(v, caso_dict):
+            attivi.append(v)
+
+    if not attivi:
+        return 0, 0, False
+
+    # Passo minimo attuale tra chi è ancora in gioco
+    min_step = min(len(v.get("percorso", [])) for v in attivi)
+    in_gioco_questo_passo = [v for v in attivi if len(v.get("percorso", [])) == min_step]
+    pronti = [v for v in in_gioco_questo_passo if "scelta_pendente" in v]
+
+    tot_attesi = len(in_gioco_questo_passo)
+    tot_pronti = len(pronti)
+
+    if tot_attesi > 0 and (tot_pronti >= tot_attesi or (forzata and tot_pronti > 0)):
+        for v in pronti:
+            _applica_scelta_in_coda(v)
+        return tot_pronti, tot_attesi, True
+
+    return tot_pronti, tot_attesi, False
+
+
 with st.sidebar:
     st.markdown(f"### 👤 **{etichetta}**")
     c1, c2 = st.columns(2)
@@ -81,7 +152,7 @@ if role == "master" and vista_master == "✍️ Crea Caso Clinico":
     st.stop()
 
 if role == "master" and vista_master == "🧠 Osservatorio Errori & Gruppi":
-    render_osservatorio_master(room)
+    render_osservatorio_master(room, role)
     st.stop()
 
 if not selected_id:
@@ -105,6 +176,11 @@ if chiave not in room["stati_casi"]:
         "consultazioni_anamnesi": 0,
     }
 state = room["stati_casi"][chiave]
+
+# Controlla la barriera sincronizzata ad ogni caricamento pagina
+n_pronti, n_attesi, sbloccato = _sincronizza_barriera_aula(room, selected_id, caso, forzata=False)
+if sbloccato:
+    st.rerun()
 
 anamnesi_open_key = f"show_anamnesi_{chiave}"
 if anamnesi_open_key not in st.session_state:
@@ -155,10 +231,19 @@ with col_l:
             st.info(caso["scheda_paziente"])
 
     if role == "master":
-        with st.expander("📡 Monitor Live & Debug", expanded=True):
+        with st.expander("📡 Monitor Live & Sincronizzazione Aula", expanded=True):
+            st.markdown(f"**Stato votazione snodo corrente:** `{n_pronti} / {n_attesi}` pronti")
+            if n_attesi > 0:
+                st.progress(min(1.0, n_pronti / n_attesi))
+            if st.button("⏭️ Forza Avanzamento Ora (ignora assenti)", use_container_width=True):
+                _sincronizza_barriera_aula(room, selected_id, caso, forzata=True)
+                st.rerun()
+
+            st.divider()
             nodi = list(caso["nodi"].keys()) + list(caso["esiti"].keys())
-            salto = st.selectbox("Salta nodo:", nodi, index=nodi.index(state["current_node"]) if state["current_node"] in nodi else 0)
+            salto = st.selectbox("Salta nodo (solo tua vista):", nodi, index=nodi.index(state["current_node"]) if state["current_node"] in nodi else 0)
             if st.button("Vai al nodo", use_container_width=True):
+                state.pop("scelta_pendente", None)
                 state["current_node"] = salto
                 st.session_state[anamnesi_open_key] = False
                 st.rerun()
@@ -167,13 +252,15 @@ with col_l:
                 if k.startswith(pref):
                     cons = v.get("consultazioni_anamnesi", 0)
                     spesa_k = f"{v.get('spesa_ssn', 0):,}".replace(",", ".") + " €"
+                    stato_voto = "⏳ Pronta" if "scelta_pendente" in v else "✍️ Vota"
                     st.caption(
-                        f"• **{k[len(pref):]}** → `{v['current_node']}` | V:{v['vitalita']}% O:{v['oncologico']}% Q:{v['qol']}% | 💶 {spesa_k} | Anamn: {cons}x"
+                        f"• **{k[len(pref):]}** [{stato_voto}] → `{v['current_node']}` | V:{v['vitalita']}% O:{v['oncologico']}% Q:{v['qol']}% | 💶 {spesa_k} | Anamn: {cons}x"
                     )
 
 with col_r:
     nid = state["current_node"]
 
+    # 1. Exitus Vitalità <= 0
     if state["vitalita"] <= 0 and nid not in caso["esiti"]:
         esito_morte = caso["esiti"].get(
             "esito_exitus",
@@ -192,6 +279,7 @@ with col_r:
             st.session_state[anamnesi_open_key] = False
             st.rerun()
 
+    # 2. Progressione Incontrollata Controllo Oncologico <= 0
     elif state["oncologico"] <= 0 and nid not in caso["esiti"]:
         esito_prog = caso["esiti"].get(
             "esito_progressione",
@@ -210,6 +298,7 @@ with col_r:
             st.session_state[anamnesi_open_key] = False
             st.rerun()
 
+    # 3. Drop-out / Rifiuto cure QoL < 30%
     elif state["qol"] < 30 and nid not in caso["esiti"]:
         esito_dropout = caso["esiti"].get(
             "esito_dropout",
@@ -228,6 +317,7 @@ with col_r:
             st.session_state[anamnesi_open_key] = False
             st.rerun()
 
+    # 4. Snodo decisionale attivo (con sala d'attesa sincronizzata)
     elif nid in caso["nodi"]:
         nodo = caso["nodi"][nid]
         st.markdown(f"### {nodo['titolo']}")
@@ -235,35 +325,56 @@ with col_r:
         if nodo.get("immagine") and os.path.exists(nodo["immagine"]):
             st.image(nodo["immagine"], use_container_width=True)
 
-        if nid not in state["ordine_opzioni"]:
-            indici = list(range(len(nodo["opzioni"])))
-            random.shuffle(indici)
-            state["ordine_opzioni"][nid] = indici
-
-        opzioni_ordinate = [nodo["opzioni"][i] for i in state["ordine_opzioni"][nid]]
-
-        with st.form(f"f_{chiave}_{nid}"):
-            scelta = st.radio("Condotta clinica:", [o["testo"] for o in opzioni_ordinate])
-            if st.form_submit_button("Conferma Scelta ➡️", use_container_width=True):
-                opt = next(o for o in opzioni_ordinate if o["testo"] == scelta)
-                col_scelta = _deduci_colore_opzione(opt)
-                state["vitalita"] = max(0, min(100, state["vitalita"] + opt.get("d_vit", 0)))
-                state["oncologico"] = max(0, min(100, state["oncologico"] + opt.get("d_onc", 0)))
-                state["qol"] = max(0, min(100, state["qol"] + opt.get("d_qol", 0)))
-                state["spesa_ssn"] = state.get("spesa_ssn", 0) + _calcola_costo_opzione(opt)
-                state["percorso"].append(
-                    {
-                        "nodo_id": nid,
-                        "nodo": nodo["titolo"],
-                        "scelta": opt["testo"],
-                        "colore": col_scelta,
-                        "anamnesi_aperta": st.session_state[anamnesi_open_key],
-                    }
-                )
-                state["current_node"] = opt["next"]
-                st.session_state[anamnesi_open_key] = False
+        # Se il partecipante ha già votato, mostra la sala d'attesa sincronizzata
+        if "scelta_pendente" in state and role != "master":
+            scelta_reg = state["scelta_pendente"]["opt"]["testo"]
+            st.success(f"✅ **Scelta registrata:** _{scelta_reg}_")
+            st.info(
+                f"⏳ **In attesa degli altri collegati ({n_pronti} su {n_attesi} hanno confermato).** "
+                "Lo snodo successivo partirà automaticamente per tutti non appena l'ultimo partecipante avrà premuto Conferma."
+            )
+            if n_attesi > 0:
+                st.progress(min(1.0, n_pronti / n_attesi))
+            if st.button("✏️ Cambia risposta finché gli altri votano", use_container_width=True):
+                state.pop("scelta_pendente", None)
                 st.rerun()
+            # Polling leggero per far scattare lo snodo successivo appena l'ultimo vota
+            time.sleep(2.5)
+            st.rerun()
 
+        else:
+            if nid not in state["ordine_opzioni"]:
+                indici = list(range(len(nodo["opzioni"])))
+                random.shuffle(indici)
+                state["ordine_opzioni"][nid] = indici
+
+            opzioni_ordinate = [nodo["opzioni"][i] for i in state["ordine_opzioni"][nid]]
+
+            with st.form(f"f_{chiave}_{nid}"):
+                scelta = st.radio("Condotta clinica:", [o["testo"] for o in opzioni_ordinate])
+                if st.form_submit_button("Conferma Scelta ➡️", use_container_width=True):
+                    opt = next(o for o in opzioni_ordinate if o["testo"] == scelta)
+                    if role == "master":
+                        # Il Master che testa lo scenario avanza subito senza bloccare l'aula
+                        state["scelta_pendente"] = {
+                            "nodo_id": nid,
+                            "nodo_titolo": nodo["titolo"],
+                            "opt": opt,
+                            "anamnesi_aperta": st.session_state[anamnesi_open_key],
+                        }
+                        _applica_scelta_in_coda(state)
+                    else:
+                        state["scelta_pendente"] = {
+                            "nodo_id": nid,
+                            "nodo_titolo": nodo["titolo"],
+                            "opt": opt,
+                            "anamnesi_aperta": st.session_state[anamnesi_open_key],
+                        }
+                        _sincronizza_barriera_aula(room, selected_id, caso, forzata=False)
+                    st.session_state[anamnesi_open_key] = False
+                    st.rerun()
+
+    # 5. Esito finale raggiunto
     elif nid in caso["esiti"]:
         esito = dict(caso["esiti"][nid])
         if esito.get("tipo") == "bianco" and (state["qol"] < 55 or state["oncologico"] < 65 or state["vitalita"] < 60):
