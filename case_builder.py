@@ -1,6 +1,10 @@
+import base64
 import importlib
+import json
 import os
 import pprint
+import urllib.error
+import urllib.request
 import streamlit as st
 
 COLORI_CLINICI = {
@@ -9,6 +13,7 @@ COLORI_CLINICI = {
         "d_vit": 5,
         "d_onc": 15,
         "d_qol": 5,
+        "costo": 1200,
         "hex": "#16a34a",
         "bg": "#dcfce7",
     },
@@ -17,6 +22,7 @@ COLORI_CLINICI = {
         "d_vit": 0,
         "d_onc": -5,
         "d_qol": -5,
+        "costo": 3500,
         "hex": "#2563eb",
         "bg": "#dbeafe",
     },
@@ -25,6 +31,7 @@ COLORI_CLINICI = {
         "d_vit": -10,
         "d_onc": -15,
         "d_qol": -25,
+        "costo": 8500,
         "hex": "#ca8a04",
         "bg": "#fef9c3",
     },
@@ -33,6 +40,7 @@ COLORI_CLINICI = {
         "d_vit": -20,
         "d_onc": -30,
         "d_qol": -20,
+        "costo": 14000,
         "hex": "#dc2626",
         "bg": "#fee2e2",
     },
@@ -41,8 +49,75 @@ COLORI_CLINICI = {
 MAPPA_CODICE_TO_LABEL = {v["codice"]: k for k, v in COLORI_CLINICI.items()}
 
 
+def _salva_su_github(percorso_repo, contenuto_testo, messaggio_commit):
+    """Esegue un commit diretto su GitHub usando i Secrets di Streamlit."""
+    try:
+        token = st.secrets.get("GITHUB_TOKEN", "")
+        repo = st.secrets.get("GITHUB_REPO", "")
+        branch = st.secrets.get("GITHUB_BRANCH", "main")
+    except Exception:
+        return False, "Secrets di Streamlit non configurati."
+
+    if not token or not repo:
+        return False, "Mancano GITHUB_TOKEN o GITHUB_REPO nei Secrets di Streamlit."
+
+    url = f"https://api.github.com/repos/{repo}/contents/{percorso_repo}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "2getSIM-App",
+    }
+
+    # 1. Verifica se il file esiste già su GitHub per ottenerne lo 'sha' (necessario per sovrascriverlo)
+    sha_esistente = None
+    req_get = urllib.request.Request(f"{url}?ref={branch}", headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req_get, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            sha_esistente = data.get("sha")
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            return False, f"Errore lettura GitHub ({e.code}): {e.reason}"
+    except Exception as e:
+        return False, f"Errore connessione GitHub: {e}"
+
+    # 2. Invia il nuovo file o l'aggiornamento via PUT
+    payload = {
+        "message": messaggio_commit,
+        "content": base64.b64encode(contenuto_testo.encode("utf-8")).decode("utf-8"),
+        "branch": branch,
+    }
+    if sha_esistente:
+        payload["sha"] = sha_esistente
+
+    req_put = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={**headers, "Content-Type": "application/json"},
+        method="PUT",
+    )
+    try:
+        with urllib.request.urlopen(req_put, timeout=15) as resp:
+            if resp.status in (200, 201):
+                azione = "aggiornato" if sha_esistente else "creato"
+                return True, f"File '{percorso_repo}' {azione} permanentemente su GitHub!"
+            return False, f"Risposta imprevista da GitHub: {resp.status}"
+    except urllib.error.HTTPError as e:
+        dettaglio = e.read().decode("utf-8", errors="ignore")
+        return False, f"Errore salvataggio GitHub ({e.code}): {dettaglio[:180]}"
+    except Exception as e:
+        return False, f"Errore rete durante il commit: {e}"
+
+
+def _prossimo_codice_disponibile(existing_files):
+    """Calcola automaticamente il codice successivo (es. 002 se esiste 001)."""
+    numeri = [int(f) for f in existing_files if f.isdigit()]
+    prossimo = max(numeri) + 1 if numeri else 1
+    return f"{prossimo:03d}"
+
+
 def _deduci_colore_da_delta(opt):
-    """Deduce il colore clinico se si carica un caso vecchio che aveva solo d_vit/d_onc/d_qol."""
     if opt.get("colore") in MAPPA_CODICE_TO_LABEL:
         return MAPPA_CODICE_TO_LABEL[opt["colore"]]
     do, dq, dv = opt.get("d_onc", 0), opt.get("d_qol", 0), opt.get("d_vit", 0)
@@ -58,18 +133,19 @@ def _deduci_colore_da_delta(opt):
 def render_case_builder(case_dir="storycase"):
     st.markdown("## ✍️ Editor Visuale Casi Clinici — Diagramma a 4 Colori")
     st.caption(
-        "Scrivi l'anamnesi, inserisci le 4 scelte per ogni snodo assegnando il colore clinico (Verde, Blu, Gialla, Rossa) e collega gli snodi successivi."
+        "Scrivi l'anamnesi, inserisci le 4 scelte per ogni snodo assegnando il colore clinico (Verde, Blu, Gialla, Rossa) e salva direttamente su GitHub."
+    )
+
+    existing_files = sorted(
+        [f[:-3] for f in os.listdir(case_dir) if f.endswith(".py") and f != "__init__"]
     )
 
     if "builder_caso" not in st.session_state:
         st.session_state.builder_caso = _template_vuoto()
     if "builder_file_id" not in st.session_state:
-        st.session_state.builder_file_id = "002"
+        st.session_state.builder_file_id = _prossimo_codice_disponibile(existing_files)
 
     # Barra caricamento caso esistente / nuovo
-    existing_files = sorted(
-        [f[:-3] for f in os.listdir(case_dir) if f.endswith(".py") and f != "__init__"]
-    )
     c_load1, c_load2, c_load3 = st.columns([2, 1, 1])
     sel_load = c_load1.selectbox(
         "Carica caso:",
@@ -79,7 +155,7 @@ def render_case_builder(case_dir="storycase"):
     if c_load2.button("📂 Carica nell'Editor", use_container_width=True):
         if sel_load == "-- Nuovo Caso Vuoto --":
             st.session_state.builder_caso = _template_vuoto()
-            st.session_state.builder_file_id = "002"
+            st.session_state.builder_file_id = _prossimo_codice_disponibile(existing_files)
         else:
             mod = importlib.import_module(f"{case_dir}.{sel_load}")
             importlib.reload(mod)
@@ -89,18 +165,16 @@ def render_case_builder(case_dir="storycase"):
 
     if c_load3.button("🆕 Azzera Tutto", use_container_width=True):
         st.session_state.builder_caso = _template_vuoto()
-        st.session_state.builder_file_id = "002"
+        st.session_state.builder_file_id = _prossimo_codice_disponibile(existing_files)
         st.rerun()
 
     dati = st.session_state.builder_caso
 
-    # -----------------------------------------------------------------------
-    # 1. ANAMNESI E INTESTAZIONE (PRIMO STEP OBBLIGATORIO)
-    # -----------------------------------------------------------------------
+    # 1. ANAMNESI E INTESTAZIONE
     with st.expander("1️⃣ Step 1 — Anamnesi Paziente & Dati Caso", expanded=True):
         c1, c2 = st.columns([1, 2])
         file_id = c1.text_input(
-            "Codice Scenario (es. 002, 003)", value=st.session_state.builder_file_id
+            "Codice Scenario (es. 002, 003, 004)", value=st.session_state.builder_file_id
         ).strip()
         st.session_state.builder_file_id = file_id
         dati["descrizione_master"] = c2.text_input(
@@ -122,9 +196,7 @@ def render_case_builder(case_dir="storycase"):
             height=160,
         )
 
-    # -----------------------------------------------------------------------
     # DIAGRAMMA DI FLUSSO LIVE COLORATO
-    # -----------------------------------------------------------------------
     with st.expander("🕸️ Diagramma di Flusso Live (Colori Clinici)", expanded=True):
         orientamento = st.radio(
             "Orientamento grafico:",
@@ -137,286 +209,5 @@ def render_case_builder(case_dir="storycase"):
             "Frecce: 🟩 Giusta | 🟦 Quasi giusta | 🟨 Trappola Linea Guida (no per questo pz) | 🟥 Sbagliata"
         )
 
-    # -----------------------------------------------------------------------
     # 2. SNODI E LE 4 SCELTE COLORATE PER CIASCUNO SNODO
-    # -----------------------------------------------------------------------
-    with st.expander("2️⃣ Step 2 — Snodi Decisionali (4 Scelte per Snodo)", expanded=True):
-        c_add1, c_add2 = st.columns([3, 1])
-        nuovo_snodo_id = c_add1.text_input(
-            "Aggiungi nuovo snodo (es. snodo2a, snodo2b, snodo3)",
-            placeholder="es. snodo2a",
-        ).strip()
-        if c_add2.button("➕ Crea Snodo", use_container_width=True) and nuovo_snodo_id:
-            if nuovo_snodo_id not in dati["nodi"]:
-                dati["nodi"][nuovo_snodo_id] = _nuovo_snodo_default(nuovo_snodo_id)
-                st.rerun()
-
-        lista_nodi = list(dati["nodi"].keys())
-        idx_init = (
-            lista_nodi.index(dati["nodo_iniziale"])
-            if dati.get("nodo_iniziale") in lista_nodi
-            else 0
-        )
-        dati["nodo_iniziale"] = st.selectbox(
-            "Snodo iniziale:", lista_nodi, index=idx_init
-        )
-
-        CREA_NUOVO_LABEL = "➕ [Crea nuovo snodo per questa scelta...]"
-        destinazioni_base = list(dati["nodi"].keys()) + list(dati["esiti"].keys())
-        opzioni_tendina = destinazioni_base + [CREA_NUOVO_LABEL]
-
-        for s_id in list(dati["nodi"].keys()):
-            st.markdown("---")
-            col_t, col_del = st.columns([5, 1])
-            col_t.markdown(f"### 🔀 Snodo: `{s_id}`")
-            if len(dati["nodi"]) > 1 and col_del.button("🗑️ Elimina", key=f"del_s_{s_id}"):
-                del dati["nodi"][s_id]
-                st.rerun()
-
-            snodo = dati["nodi"][s_id]
-            snodo["titolo"] = st.text_input(
-                "Titolo snodo", value=snodo["titolo"], key=f"t_{s_id}"
-            )
-            snodo["testo"] = st.text_area(
-                "Quadro clinico / Evoluzione",
-                value=snodo["testo"],
-                key=f"txt_{s_id}",
-                height=85,
-            )
-
-            # Garantisce sempre 4 caselle di scelta per ogni snodo
-            while len(snodo["opzioni"]) < 4:
-                snodo["opzioni"].append(
-                    {
-                        "testo": f"Opzione {len(snodo['opzioni']) + 1}",
-                        "colore": "blu",
-                        "d_vit": 0,
-                        "d_onc": -5,
-                        "d_qol": -5,
-                        "next": destinazioni_base[0],
-                    }
-                )
-
-            for idx, opt in enumerate(snodo["opzioni"]):
-                label_colore_att = _deduci_colore_da_delta(opt)
-                info_col = COLORI_CLINICI[label_colore_att]
-
-                st.markdown(
-                    f"""
-                    <div style="border-left: 6px solid {info_col['hex']}; background-color: {info_col['bg']}; padding: 6px 12px; border-radius: 6px; margin-top: 8px; margin-bottom: 4px; color: #0f172a; font-weight: 600; font-size: 0.9rem;">
-                        Scelta {idx + 1} — {label_colore_att}
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-                c_txt, c_col, c_nxt = st.columns([2.4, 1.5, 1.3])
-                opt["testo"] = c_txt.text_input(
-                    "Testo scelta",
-                    value=opt["testo"],
-                    key=f"opt_{s_id}_{idx}",
-                    label_visibility="collapsed",
-                )
-
-                scelta_colore = c_col.selectbox(
-                    "Colore casella",
-                    list(COLORI_CLINICI.keys()),
-                    index=list(COLORI_CLINICI.keys()).index(label_colore_att),
-                    key=f"col_{s_id}_{idx}",
-                    label_visibility="collapsed",
-                )
-                # Aggiorna automaticamente i punteggi in base al colore scelto
-                cfg = COLORI_CLINICI[scelta_colore]
-                opt["colore"] = cfg["codice"]
-                opt["d_vit"] = cfg["d_vit"]
-                opt["d_onc"] = cfg["d_onc"]
-                opt["d_qol"] = cfg["d_qol"]
-
-                curr_next = (
-                    opt["next"] if opt["next"] in destinazioni_base else destinazioni_base[0]
-                )
-                scelta_dest = c_nxt.selectbox(
-                    "Snodo successivo",
-                    opzioni_tendina,
-                    index=opzioni_tendina.index(curr_next),
-                    key=f"nxt_{s_id}_{idx}",
-                    label_visibility="collapsed",
-                )
-
-                if scelta_dest == CREA_NUOVO_LABEL:
-                    c_new1, c_new2 = st.columns([3, 1])
-                    nome_ramo_volo = c_new1.text_input(
-                        "Nome nuovo snodo (es. snodo2b):",
-                        key=f"new_branch_{s_id}_{idx}",
-                        placeholder="es. snodo2b",
-                    ).strip()
-                    if (
-                        c_new2.button(
-                            "Crea e Collega",
-                            key=f"btn_branch_{s_id}_{idx}",
-                            use_container_width=True,
-                        )
-                        and nome_ramo_volo
-                    ):
-                        if nome_ramo_volo not in dati["nodi"]:
-                            dati["nodi"][nome_ramo_volo] = _nuovo_snodo_default(
-                                nome_ramo_volo
-                            )
-                        opt["next"] = nome_ramo_volo
-                        st.rerun()
-                else:
-                    opt["next"] = scelta_dest
-
-    # -----------------------------------------------------------------------
-    # 3. ESITI FINALI
-    # -----------------------------------------------------------------------
-    with st.expander("🏁 Step 3 — Esiti Finali (Tazza Bianca / Gialla / Rossa)", expanded=False):
-        for e_id, esito in dati["esiti"].items():
-            st.markdown(f"**Esito: `{e_id}`**")
-            esito["titolo"] = st.text_input(
-                "Titolo esito", value=esito["titolo"], key=f"et_{e_id}"
-            )
-            esito["descrizione"] = st.text_area(
-                "Spiegazione finale",
-                value=esito["descrizione"],
-                key=f"ed_{e_id}",
-            )
-
-    # -----------------------------------------------------------------------
-    # 4. SALVATAGGIO E DOWNLOAD PER GITHUB
-    # -----------------------------------------------------------------------
-    st.divider()
-    codice_generato = f"CASO = {pprint.pformat(dati, width=100, sort_dicts=False)}\n"
-
-    c_save, c_dl = st.columns(2)
-    with c_save:
-        if st.button("💾 Salva subito nella cartella storycase/", use_container_width=True):
-            if not file_id or not dati["titolo"]:
-                st.error("Inserisci almeno il Codice Scenario (es. 002) e il Titolo.")
-            else:
-                os.makedirs(case_dir, exist_ok=True)
-                percorso = os.path.join(case_dir, f"{file_id}.py")
-                with open(percorso, "w", encoding="utf-8") as f:
-                    f.write(codice_generato)
-                st.success(f"Salvato in '{percorso}'! Ora è selezionabile in aula.")
-
-    with c_dl:
-        st.download_button(
-            label=f"⬇️ Scarica {file_id or 'caso'}.py (per GitHub)",
-            data=codice_generato,
-            file_name=f"{file_id or 'caso'}.py",
-            mime="text/x-python",
-            use_container_width=True,
-        )
-
-
-def _genera_graphviz_dot(dati, rankdir="TB"):
-    nodo_init = dati.get("nodo_iniziale", "")
-    raggiungibili = {nodo_init}
-    for s_id, snodo in dati.get("nodi", {}).items():
-        for opt in snodo.get("opzioni", []):
-            raggiungibili.add(opt.get("next"))
-
-    righe = [
-        "digraph G {",
-        f'  rankdir="{rankdir}";',
-        '  bgcolor="transparent";',
-        '  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=11, margin="0.16,0.10"];',
-        '  edge [fontname="Inter,Arial", fontsize=9, penwidth=1.6];',
-    ]
-
-    for s_id, snodo in dati.get("nodi", {}).items():
-        titolo_breve = snodo.get("titolo", s_id).replace('"', "'")
-        if len(titolo_breve) > 36:
-            titolo_breve = titolo_breve[:33] + "..."
-        label = f"{s_id}\\n{titolo_breve}"
-
-        if s_id == nodo_init:
-            fill, border, fontcol = "#e0e7ff", "#4338ca", "#1e1b4b"
-        elif s_id not in raggiungibili:
-            fill, border, fontcol = "#ffedd5", "#ea580c", "#7c2d12"
-        else:
-            fill, border, fontcol = "#f8fafc", "#475569", "#0f172a"
-
-        righe.append(
-            f'  "{s_id}" [label="{label}", fillcolor="{fill}", color="{border}", penwidth=1.8, fontcolor="{fontcol}"];'
-        )
-
-    for e_id, esito in dati.get("esiti", {}).items():
-        tipo = esito.get("tipo", "rosso")
-        if tipo == "bianco":
-            fill, border, fontcol = "#dcfce7", "#16a34a", "#14532d"
-        elif tipo == "giallo":
-            fill, border, fontcol = "#fef9c3", "#ca8a04", "#713f12"
-        else:
-            fill, border, fontcol = "#fee2e2", "#dc2626", "#7f1d1d"
-        label = f"{e_id}\\n{esito.get('titolo', e_id)[:28]}"
-        righe.append(
-            f'  "{e_id}" [label="{label}", shape=oval, fillcolor="{fill}", color="{border}", penwidth=2, fontcolor="{fontcol}"];'
-        )
-
-    for s_id, snodo in dati.get("nodi", {}).items():
-        for idx, opt in enumerate(snodo.get("opzioni", []), 1):
-            dest = opt.get("next", "")
-            testo_opt = opt.get("testo", "").replace('"', "'")
-            if len(testo_opt) > 28:
-                testo_opt = testo_opt[:25] + "..."
-            label_col = _deduci_colore_da_delta(opt)
-            edge_color = COLORI_CLINICI[label_col]["hex"]
-            edge_label = f"{idx}. {testo_opt}"
-            righe.append(
-                f'  "{s_id}" -> "{dest}" [label="{edge_label}", color="{edge_color}", fontcolor="{edge_color}"];'
-            )
-
-    righe.append("}")
-    return "\n".join(righe)
-
-
-def _nuovo_snodo_default(snodo_id):
-    return {
-        "titolo": f"📍 {snodo_id.upper()} — Evoluzione Clinica",
-        "testo": "Descrivi il quadro clinico su questo snodo...",
-        "opzioni": [
-            {"testo": "Scelta 1 (Giusta tailored)", "colore": "verde", "d_vit": 5, "d_onc": 15, "d_qol": 5, "next": "esito_vittoria"},
-            {"testo": "Scelta 2 (Quasi giusta)", "colore": "blu", "d_vit": 0, "d_onc": -5, "d_qol": -5, "next": "esito_parziale"},
-            {"testo": "Scelta 3 (Linea guida ma no per questo pz)", "colore": "giallo", "d_vit": -10, "d_onc": -15, "d_qol": -25, "next": "esito_parziale"},
-            {"testo": "Scelta 4 (Sbagliata)", "colore": "rosso", "d_vit": -20, "d_onc": -30, "d_qol": -20, "next": "esito_sconfitta"},
-        ],
-    }
-
-
-def _template_vuoto():
-    return {
-        "badge": "ARENA URO-ONCOLOGICA",
-        "descrizione_master": "",
-        "titolo": "",
-        "sottotitolo": "",
-        "nodo_iniziale": "snodo1",
-        "vitalita_iniziale": 100,
-        "oncologico_iniziale": 100,
-        "qol_iniziale": 75,
-        "scheda_paziente": "* **Paziente:** \n* **Anamnesi patologica:** \n* **Terapia domiciliare:** \n* **Anamnesi familiare:** \n* **Esordio & Esami:** ",
-        "nodi": {
-            "snodo1": _nuovo_snodo_default("snodo1"),
-        },
-        "esiti": {
-            "esito_vittoria": {
-                "tipo": "bianco",
-                "titolo": "🏆 TAZZA BIANCA CONQUISTATA!",
-                "sottotitolo": '"Failure is not an option."',
-                "descrizione": "Gestione clinica tailored ottimale.",
-            },
-            "esito_parziale": {
-                "tipo": "giallo",
-                "titolo": "⚠️ RISULTATO INTERMEDIO",
-                "sottotitolo": "Cronicizzazione con sequele",
-                "descrizione": "Controllo parziale di malattia o scelta non ritagliata sul paziente.",
-            },
-            "esito_sconfitta": {
-                "tipo": "rosso",
-                "titolo": "❌ TAZZA ROSSA ASSEGNATA!",
-                "sottotitolo": '"Shit... happens."',
-                "descrizione": "Complicanza maggiore o progressione non intercettata.",
-            },
-        },
-    }
+    with st.
