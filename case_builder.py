@@ -8,6 +8,15 @@ import urllib.request
 import streamlit as st
 
 COLORI_CLINICI = {
+    "⬜ Da assegnare": {
+        "codice": "blu",
+        "d_vit": 0,
+        "d_onc": -5,
+        "d_qol": -5,
+        "costo": 3500,
+        "hex": "#94a3b8",
+        "bg": "#ffffff",
+    },
     "🟩 Verde — Giusta (Tailored ottimale)": {
         "codice": "verde",
         "d_vit": 5,
@@ -46,11 +55,15 @@ COLORI_CLINICI = {
     },
 }
 
-MAPPA_CODICE_TO_LABEL = {v["codice"]: k for k, v in COLORI_CLINICI.items()}
+MAPPA_CODICE_TO_LABEL = {
+    "verde": "🟩 Verde — Giusta (Tailored ottimale)",
+    "blu": "🟦 Blu — Quasi giusta (Ragionevole / Subottimale)",
+    "giallo": "🟨 Gialla — Giusta da Linea Guida ma NON per questo paziente",
+    "rosso": "🟥 Rossa — Sbagliata / Pericolosa",
+}
 
 
 def _salva_su_github(percorso_repo, contenuto_testo, messaggio_commit):
-    """Esegue un commit diretto su GitHub usando i Secrets di Streamlit."""
     try:
         token = st.secrets.get("GITHUB_TOKEN", "")
         repo = st.secrets.get("GITHUB_REPO", "")
@@ -69,7 +82,6 @@ def _salva_su_github(percorso_repo, contenuto_testo, messaggio_commit):
         "User-Agent": "2getSIM-App",
     }
 
-    # 1. Verifica se il file esiste già su GitHub per ottenerne lo 'sha' (necessario per sovrascriverlo)
     sha_esistente = None
     req_get = urllib.request.Request(f"{url}?ref={branch}", headers=headers, method="GET")
     try:
@@ -82,7 +94,6 @@ def _salva_su_github(percorso_repo, contenuto_testo, messaggio_commit):
     except Exception as e:
         return False, f"Errore connessione GitHub: {e}"
 
-    # 2. Invia il nuovo file o l'aggiornamento via PUT
     payload = {
         "message": messaggio_commit,
         "content": base64.b64encode(contenuto_testo.encode("utf-8")).decode("utf-8"),
@@ -111,13 +122,14 @@ def _salva_su_github(percorso_repo, contenuto_testo, messaggio_commit):
 
 
 def _prossimo_codice_disponibile(existing_files):
-    """Calcola automaticamente il codice successivo (es. 002 se esiste 001)."""
     numeri = [int(f) for f in existing_files if f.isdigit()]
     prossimo = max(numeri) + 1 if numeri else 1
     return f"{prossimo:03d}"
 
 
 def _deduci_colore_da_delta(opt):
+    if not opt.get("testo", "").strip() and not opt.get("colore"):
+        return "⬜ Da assegnare"
     if opt.get("colore") in MAPPA_CODICE_TO_LABEL:
         return MAPPA_CODICE_TO_LABEL[opt["colore"]]
     do, dq, dv = opt.get("d_onc", 0), opt.get("d_qol", 0), opt.get("d_vit", 0)
@@ -130,10 +142,31 @@ def _deduci_colore_da_delta(opt):
     return "🟦 Blu — Quasi giusta (Ragionevole / Subottimale)"
 
 
+def _prossimo_id_snodo(nodi_dict):
+    i = len(nodi_dict) + 1
+    while f"snodo{i}" in nodi_dict:
+        i += 1
+    return f"snodo{i}"
+
+
+def _raccogli_opzioni_note(dati):
+    """Mappa ogni testo d'opzione già scritto al suo colore e snodo successivo."""
+    mappa = {}
+    for s_id, snodo in dati.get("nodi", {}).items():
+        for opt in snodo.get("opzioni", []):
+            txt = opt.get("testo", "").strip()
+            if txt and txt not in mappa:
+                mappa[txt] = {
+                    "colore": opt.get("colore", "blu"),
+                    "next": opt.get("next", "esito_parziale"),
+                }
+    return mappa
+
+
 def render_case_builder(case_dir="storycase"):
-    st.markdown("## ✍️ Editor Visuale Casi Clinici — Diagramma a 4 Colori")
+    st.markdown("## ✍️ Editor Casi Clinici — Scrittura Guidata a 4 Caselle")
     st.caption(
-        "Scrivi l'anamnesi, inserisci le 4 scelte per ogni snodo assegnando il colore clinico (Verde, Blu, Gialla, Rossa) e salva direttamente su GitHub."
+        "1. Scrivi l'anamnesi • 2. Compila le 4 caselle bianche e assegna il colore • 3. Scegli per ciascuna 'Fine Caso' oppure 'Prossimo Snodo' (nuovo o già esistente)."
     )
 
     existing_files = sorted(
@@ -144,6 +177,8 @@ def render_case_builder(case_dir="storycase"):
         st.session_state.builder_caso = _template_vuoto()
     if "builder_file_id" not in st.session_state:
         st.session_state.builder_file_id = _prossimo_codice_disponibile(existing_files)
+    if "builder_active_node" not in st.session_state:
+        st.session_state.builder_active_node = "snodo1"
 
     # Barra caricamento caso esistente / nuovo
     c_load1, c_load2, c_load3 = st.columns([2, 1, 1])
@@ -161,24 +196,31 @@ def render_case_builder(case_dir="storycase"):
             importlib.reload(mod)
             st.session_state.builder_caso = mod.CASO
             st.session_state.builder_file_id = sel_load
+        st.session_state.builder_active_node = st.session_state.builder_caso.get("nodo_iniziale", "snodo1")
         st.rerun()
 
     if c_load3.button("🆕 Azzera Tutto", use_container_width=True):
         st.session_state.builder_caso = _template_vuoto()
         st.session_state.builder_file_id = _prossimo_codice_disponibile(existing_files)
+        st.session_state.builder_active_node = "snodo1"
         st.rerun()
 
     dati = st.session_state.builder_caso
+    lista_nodi = list(dati["nodi"].keys())
+    if st.session_state.builder_active_node not in lista_nodi:
+        st.session_state.builder_active_node = lista_nodi[0]
 
+    # -----------------------------------------------------------------------
     # 1. ANAMNESI E INTESTAZIONE
-    with st.expander("1️⃣ Step 1 — Anamnesi Paziente & Dati Caso", expanded=True):
+    # -----------------------------------------------------------------------
+    with st.expander("1️⃣ Anamnesi & Intestazione Caso", expanded=True):
         c1, c2 = st.columns([1, 2])
         file_id = c1.text_input(
-            "Codice Scenario (es. 002, 003, 004)", value=st.session_state.builder_file_id
+            "Codice Scenario (es. 002, 003)", value=st.session_state.builder_file_id
         ).strip()
         st.session_state.builder_file_id = file_id
         dati["descrizione_master"] = c2.text_input(
-            "Promemoria per Regia Master (invisibile ai discenti)",
+            "Promemoria per Regia Master (visibile solo ai docenti)",
             value=dati.get("descrizione_master", ""),
             placeholder="es. K vescica NMIBC BCG-unresponsive in paziente cardiopatico",
         )
@@ -188,26 +230,4 @@ def render_case_builder(case_dir="storycase"):
             placeholder="es. Paziente con ematuria recidivante dopo induzione BCG",
         )
         dati["sottotitolo"] = st.text_input(
-            "Sottotitolo", value=dati.get("sottotitolo", "")
-        )
-        dati["scheda_paziente"] = st.text_area(
-            "Anamnesi & Cartella Clinica (si nasconde dopo la prima scelta; inserisci qui eventuali controindicazioni o familiarità)",
-            value=dati.get("scheda_paziente", ""),
-            height=160,
-        )
-
-    # DIAGRAMMA DI FLUSSO LIVE COLORATO
-    with st.expander("🕸️ Diagramma di Flusso Live (Colori Clinici)", expanded=True):
-        orientamento = st.radio(
-            "Orientamento grafico:",
-            ["Verticale (Dall'alto in basso)", "Orizzontale (Da sinistra a destra)"],
-            horizontal=True,
-        )
-        rankdir = "TB" if orientamento.startswith("Verticale") else "LR"
-        st.graphviz_chart(_genera_graphviz_dot(dati, rankdir=rankdir), use_container_width=True)
-        st.caption(
-            "Frecce: 🟩 Giusta | 🟦 Quasi giusta | 🟨 Trappola Linea Guida (no per questo pz) | 🟥 Sbagliata"
-        )
-
-    # 2. SNODI E LE 4 SCELTE COLORATE PER CIASCUNO SNODO
-    with st.
+            "Sottotitolo", value=dati.get("sott
