@@ -1,14 +1,18 @@
-THEME_COLORS = {
-    "background": "#F8FAFC",
-    "surface": "#FFFFFF",
-    "ink": "#0F172A",
-    "ruby": "#DC2626",
-    "blue": "#1D4ED8",
-    "emerald": "#047857",
-    "amber": "#B45309"
-}
+import streamlit as st
 
-TYPOGRAPHY = {
-    "font_sans": "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-    "font_mono": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
-}
+def apply_fonts():
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        html, body, [class*="css"] {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+        h1, h2, h3 {
+            font-weight: 700 !important;
+            letter-spacing: -0.02em;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
