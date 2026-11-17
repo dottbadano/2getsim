@@ -1,6 +1,7 @@
 import importlib
 import os
 import streamlit as st
+from case_builder import render_case_builder
 from font import apply_fonts
 from security import render_regia_master, risolvi_identita_gioco, verifica_accesso
 from text import render_box_esito, render_header_caso
@@ -15,25 +16,38 @@ CASE_DIR = "casi_clinici"
 os.makedirs(CASE_DIR, exist_ok=True)
 cases = sorted([f[:-3] for f in os.listdir(CASE_DIR) if f.endswith(".py") and f != "__init__"])
 
-if not cases:
-    st.error("Inserisci almeno un file nella cartella 'casi_clinici/' (es. 001.py).")
-    st.stop()
-
 with st.sidebar:
     st.markdown(f"### 👤 **{etichetta}**")
     c1, c2 = st.columns(2)
     if c1.button("🔄 Aggiorna", use_container_width=True):
         st.rerun()
     if c2.button("Esci", use_container_width=True):
-        st.session_state.update(authenticated=False, user_role=None, user_id=None)
+        st.session_state.authenticated = False
         st.rerun()
     st.divider()
 
-    idx = cases.index(room["caso_attivo_globale"]) if room["caso_attivo_globale"] in cases else 0
-    selected_id = st.selectbox("Caso Clinico", cases, index=idx, format_func=lambda x: f"Caso {x}")
-
+    vista_master = "🎮 Simulazione Aula"
     if role == "master":
+        vista_master = st.radio("Vista Docente:", ["🎮 Simulazione Aula", "✍️ Crea Caso Clinico"])
+        st.divider()
+
+    if cases:
+        idx = cases.index(room["caso_attivo_globale"]) if room["caso_attivo_globale"] in cases else 0
+        selected_id = st.selectbox("Caso Clinico", cases, index=idx, format_func=lambda x: f"Caso {x}")
+    else:
+        selected_id = None
+
+    if role == "master" and selected_id:
         render_regia_master(room, selected_id)
+
+# Se il Master ha scelto l'Editor Visuale, mostra case_builder.py
+if role == "master" and vista_master == "✍️ Crea Caso Clinico":
+    render_case_builder(CASE_DIR)
+    st.stop()
+
+if not selected_id:
+    st.error("Inserisci almeno un file nella cartella 'casi_clinici/' (es. 001.py) oppure crealo da 'Crea Caso Clinico'.")
+    st.stop()
 
 mod = importlib.import_module(f"{CASE_DIR}.{selected_id}")
 importlib.reload(mod)
