@@ -17,6 +17,19 @@ CASE_DIR = "storycase"
 os.makedirs(CASE_DIR, exist_ok=True)
 cases = sorted([f[:-3] for f in os.listdir(CASE_DIR) if f.endswith(".py") and f != "__init__"])
 
+
+def get_case_label(case_id):
+    """Restituisce solo il codice '001' ai discenti; aggiunge la descrizione clinica ai Master."""
+    if role != "master":
+        return case_id
+    try:
+        mod = importlib.import_module(f"{CASE_DIR}.{case_id}")
+        desc = mod.CASO.get("descrizione_master") or mod.CASO.get("titolo", "")
+        return f"{case_id} — {desc}" if desc else case_id
+    except Exception:
+        return case_id
+
+
 with st.sidebar:
     st.markdown(f"### 👤 **{etichetta}**")
     c1, c2 = st.columns(2)
@@ -34,7 +47,7 @@ with st.sidebar:
 
     if cases:
         idx = cases.index(room["caso_attivo_globale"]) if room["caso_attivo_globale"] in cases else 0
-        selected_id = st.selectbox("Seleziona Scenario", cases, index=idx, format_func=lambda x: f"Scenario {x}")
+        selected_id = st.selectbox("Seleziona Scenario", cases, index=idx, format_func=get_case_label)
     else:
         selected_id = None
 
@@ -66,12 +79,10 @@ if chiave not in room["stati_casi"]:
     }
 state = room["stati_casi"][chiave]
 
-# Chiave locale per aprire/chiudere l'anamnesi sul singolo dispositivo
 anamnesi_open_key = f"show_anamnesi_{chiave}"
 if anamnesi_open_key not in st.session_state:
     st.session_state[anamnesi_open_key] = False
 
-# Header pulito senza badge "Caso Clinico"
 st.markdown(
     f"""
     <div style="background: linear-gradient(135deg, #1e293b, #0f172a); padding: 1.4rem; border-radius: 12px; color: white; margin-bottom: 1.5rem;">
@@ -94,7 +105,6 @@ with col_l:
 
     st.divider()
 
-    # Alla prima schermata (0 scelte fatte) l'anamnesi è aperta; dopo la prima scelta sparisce
     if len(state["percorso"]) == 0:
         st.markdown("### 📋 Cartella Paziente & Anamnesi")
         st.info(caso["scheda_paziente"])
@@ -129,7 +139,6 @@ with col_l:
 with col_r:
     nid = state["current_node"]
 
-    # Controllo automatico exitus clinico se Vitalità <= 0 in qualsiasi punto
     if state["vitalita"] <= 0 and nid not in caso["esiti"]:
         esito_morte = caso["esiti"].get(
             "esito_exitus",
@@ -171,7 +180,6 @@ with col_r:
                 state["qol"] = max(0, min(100, state["qol"] + opt.get("d_qol", 0)))
                 state["percorso"].append({"nodo": nodo["titolo"], "scelta": opt["testo"]})
                 state["current_node"] = opt["next"]
-                # Richiude automaticamente l'anamnesi al passaggio allo snodo successivo
                 st.session_state[anamnesi_open_key] = False
                 st.rerun()
 
