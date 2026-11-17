@@ -12,7 +12,7 @@ apply_fonts()
 room, role, uid = verifica_accesso()
 bucket, etichetta = risolvi_identita_gioco(room, role, uid)
 
-CASE_DIR = "casi_clinici"
+CASE_DIR = "storycase"
 os.makedirs(CASE_DIR, exist_ok=True)
 cases = sorted([f[:-3] for f in os.listdir(CASE_DIR) if f.endswith(".py") and f != "__init__"])
 
@@ -40,13 +40,12 @@ with st.sidebar:
     if role == "master" and selected_id:
         render_regia_master(room, selected_id)
 
-# Se il Master ha scelto l'Editor Visuale, mostra case_builder.py
 if role == "master" and vista_master == "✍️ Crea Caso Clinico":
     render_case_builder(CASE_DIR)
     st.stop()
 
 if not selected_id:
-    st.error("Inserisci almeno un file nella cartella 'casi_clinici/' (es. 001.py) oppure crealo da 'Crea Caso Clinico'.")
+    st.error("Inserisci almeno un file nella cartella 'storycase/' (es. 001.py) oppure crealo da 'Crea Caso Clinico'.")
     st.stop()
 
 mod = importlib.import_module(f"{CASE_DIR}.{selected_id}")
