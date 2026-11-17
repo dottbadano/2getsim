@@ -1,6 +1,10 @@
 CASO = {
     "badge": "CASO 001 — ARENA URO-ONCOLOGICA",
     "titolo": "Il Paziente con RAU, Macroematuria e PSA 12",
+    "descrizione_master": "K prostata BRCA mutato - catetere a permanenza",
+    "sottotitolo": "Gestione integrata tra ostruzione meccanica, imaging e target molecolari.",
+    "badge": "CASO 001 — ARENA URO-ONCOLOGICA",
+    "titolo": "Il Paziente con RAU, Macroematuria e PSA 12",
     "sottotitolo": "Gestione integrata tra ostruzione meccanica, imaging e target molecolari.",
     "nodo_iniziale": "snodo1",
     "vitalita_iniziale": 100,
