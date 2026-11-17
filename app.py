@@ -6,7 +6,6 @@ import streamlit as st
 from case_builder import render_case_builder
 from font import apply_fonts
 from security import render_regia_master, risolvi_identita_gioco, verifica_accesso
-from text import render_box_esito
 from valutazione import render_osservatorio_master
 
 st.set_page_config(page_title="2getSIM", page_icon="⚡", layout="wide")
@@ -51,7 +50,6 @@ def _calcola_costo_opzione(opt):
 
 
 def _is_terminato(stato_run, caso_dict):
-    """Restituisce True se la postazione ha già raggiunto un esito finale o un blocco automatico."""
     nid = stato_run.get("current_node", "")
     if nid in caso_dict.get("esiti", {}):
         return True
@@ -65,7 +63,6 @@ def _is_terminato(stato_run, caso_dict):
 
 
 def _applica_scelta_in_coda(stato_run):
-    """Applica definitivamente la scelta prenotata allo stato del paziente quando tutti hanno votato."""
     pending = stato_run.pop("scelta_pendente", None)
     if not pending:
         return
@@ -88,14 +85,12 @@ def _applica_scelta_in_coda(stato_run):
 
 
 def _sincronizza_barriera_aula(room, selected_id, caso_dict, forzata=False):
-    """Controlla se tutti i partecipanti attivi sullo stesso passo hanno votato; in tal caso sblocca tutti."""
     pref = f"{selected_id}__"
     attivi = []
     for k, v in room.get("stati_casi", {}).items():
         if not k.startswith(pref):
             continue
         entita = k[len(pref):]
-        # Esclude i Master di regia dalla barriera dei votanti
         if entita.lower() in ("gbadano", "acavo", "smigone") or entita.lower().startswith("master"):
             continue
         if not _is_terminato(v, caso_dict):
@@ -104,7 +99,6 @@ def _sincronizza_barriera_aula(room, selected_id, caso_dict, forzata=False):
     if not attivi:
         return 0, 0, False
 
-    # Passo minimo attuale tra chi è ancora in gioco
     min_step = min(len(v.get("percorso", [])) for v in attivi)
     in_gioco_questo_passo = [v for v in attivi if len(v.get("percorso", [])) == min_step]
     pronti = [v for v in in_gioco_questo_passo if "scelta_pendente" in v]
@@ -118,6 +112,79 @@ def _sincronizza_barriera_aula(room, selected_id, caso_dict, forzata=False):
         return tot_pronti, tot_attesi, True
 
     return tot_pronti, tot_attesi, False
+
+
+def _colore_barra(valore):
+    if valore >= 65:
+        return "#16a34a"  # Verde clinico
+    if valore >= 35:
+        return "#d97706"  # Ambra
+    return "#dc2626"      # Rosso critico
+
+
+def _render_quadro_conclusivo_sobrio(state, stato_clinico_label, nota_clinica, chiave, anamnesi_open_key, room):
+    """Mostra il quadro finale sobrio con le 3 barre cliniche in grande evidenza, spesa SSN e cronologia."""
+    vit = max(0, min(100, state.get("vitalita", 0)))
+    onc = max(0, min(100, state.get("oncologico", 0)))
+    qol = max(0, min(100, state.get("qol", 0)))
+    spesa_fmt = f"{state.get('spesa_ssn', 0):,}".replace(",", ".") + " €"
+
+    st.markdown(
+        f"""
+        <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.2rem;">
+            <div style="font-size: 0.8rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #475569;">
+                Quadro Clinico Conclusivo
+            </div>
+            <h3 style="margin: 0.25rem 0 0.5rem 0; color: #0f172a; font-size: 1.35rem;">{stato_clinico_label}</h3>
+            <p style="margin: 0 0 1.25rem 0; color: #334155; font-size: 0.96rem; line-height: 1.5;">{nota_clinica}</p>
+
+            <div style="margin-bottom: 1rem;">
+                <div style="display: flex; justify-content: space-between; font-weight: 700; color: #0f172a; margin-bottom: 4px;">
+                    <span>❤️ Vitalità</span>
+                    <span>{vit}%</span>
+                </div>
+                <div style="background: #e2e8f0; border-radius: 8px; height: 18px; width: 100%; overflow: hidden;">
+                    <div style="background: {_colore_barra(vit)}; height: 100%; width: {vit}%; transition: width 0.4s;"></div>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 1rem;">
+                <div style="display: flex; justify-content: space-between; font-weight: 700; color: #0f172a; margin-bottom: 4px;">
+                    <span>🎯 Controllo Oncologico</span>
+                    <span>{onc}%</span>
+                </div>
+                <div style="background: #e2e8f0; border-radius: 8px; height: 18px; width: 100%; overflow: hidden;">
+                    <div style="background: {_colore_barra(onc)}; height: 100%; width: {onc}%; transition: width 0.4s;"></div>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 1.1rem;">
+                <div style="display: flex; justify-content: space-between; font-weight: 700; color: #0f172a; margin-bottom: 4px;">
+                    <span>🌿 Qualità di Vita (QoL)</span>
+                    <span>{qol}%</span>
+                </div>
+                <div style="background: #e2e8f0; border-radius: 8px; height: 18px; width: 100%; overflow: hidden;">
+                    <div style="background: {_colore_barra(qol)}; height: 100%; width: {qol}%; transition: width 0.4s;"></div>
+                </div>
+            </div>
+
+            <div style="border-top: 1px solid #cbd5e1; padding-top: 0.85rem; display: flex; justify-content: space-between; align-items: center; color: #1e293b; font-size: 0.95rem;">
+                <span>💶 <strong>Impatto economico percorso (SSN):</strong> {spesa_fmt}</span>
+                <span>📋 <strong>Consultazioni anamnesi:</strong> {state.get('consultazioni_anamnesi', 0)}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("🗂️ Riepilogo decisioni prese lungo il percorso", expanded=True):
+        for idx, step in enumerate(state["percorso"], 1):
+            st.markdown(f"**{idx}. {step['nodo']}** → `{step['scelta']}`")
+
+    if st.button("🔄 Ripeti Simulazione", use_container_width=True):
+        del room["stati_casi"][chiave]
+        st.session_state[anamnesi_open_key] = False
+        st.rerun()
 
 
 with st.sidebar:
@@ -177,7 +244,6 @@ if chiave not in room["stati_casi"]:
     }
 state = room["stati_casi"][chiave]
 
-# Controlla la barriera sincronizzata ad ogni caricamento pagina
 n_pronti, n_attesi, sbloccato = _sincronizza_barriera_aula(room, selected_id, caso, forzata=False)
 if sbloccato:
     st.rerun()
@@ -200,17 +266,21 @@ st.markdown(
 col_l, col_r = st.columns([1.15, 1.75], gap="large")
 
 with col_l:
-    st.markdown("### 📊 Stato Paziente & Risorse")
+    st.markdown("### 📊 Parametri Paziente")
+    vit_c = max(0, min(100, state["vitalita"]))
+    onc_c = max(0, min(100, state["oncologico"]))
+    qol_c = max(0, min(100, state["qol"]))
+
     m1, m2 = st.columns(2)
-    m1.metric("❤️ Vitalità", f"{max(0, min(100, state['vitalita']))}%")
-    m2.metric("🎯 Controllo Onc.", f"{max(0, min(100, state['oncologico']))}%")
+    m1.metric("❤️ Vitalità", f"{vit_c}%")
+    m2.metric("🎯 Controllo Onc.", f"{onc_c}%")
 
     m3, m4 = st.columns(2)
-    m3.metric("🌿 Qualità di Vita", f"{max(0, min(100, state['qol']))}%")
+    m3.metric("🌿 Qualità di Vita", f"{qol_c}%")
     spesa_fmt = f"{state.get('spesa_ssn', 0):,}".replace(",", ".") + " €"
     m4.metric("💶 Spesa SSN", spesa_fmt)
 
-    if 30 <= state["qol"] < 40:
+    if 30 <= qol_c < 40 and not _is_terminato(state, caso):
         st.warning("⚠️ Qualità di Vita critica: il paziente fatica a tollerare il carico terapeutico.")
 
     st.divider()
@@ -262,62 +332,38 @@ with col_r:
 
     # 1. Exitus Vitalità <= 0
     if state["vitalita"] <= 0 and nid not in caso["esiti"]:
-        esito_morte = caso["esiti"].get(
-            "esito_exitus",
-            {
-                "tipo": "rosso",
-                "titolo": "💀 EXITUS CLINICO — VITALITÀ A 0%",
-                "sottotitolo": '"La somma delle complicanze non ha lasciato margine."',
-                "descrizione": "Le scelte cliniche accumulate hanno portato a tossicità fatale o progressione sistemica irreversibile prima di completare il percorso terapeutico.",
-            },
+        _render_quadro_conclusivo_sobrio(
+            state,
+            "Exitus clinico (Vitalità 0%)",
+            "La somma delle tossicità o delle complicanze cliniche ha compromesso irreversibilmente la sopravvivenza del paziente prima del completamento del percorso.",
+            chiave,
+            anamnesi_open_key,
+            room,
         )
-        st.markdown(render_box_esito(esito_morte), unsafe_allow_html=True)
-        for idx, step in enumerate(state["percorso"], 1):
-            st.markdown(f"**{idx}. {step['nodo']}** → `{step['scelta']}`")
-        if st.button("🔄 Ripeti Simulazione", use_container_width=True):
-            del room["stati_casi"][chiave]
-            st.session_state[anamnesi_open_key] = False
-            st.rerun()
 
     # 2. Progressione Incontrollata Controllo Oncologico <= 0
     elif state["oncologico"] <= 0 and nid not in caso["esiti"]:
-        esito_prog = caso["esiti"].get(
-            "esito_progressione",
-            {
-                "tipo": "rosso",
-                "titolo": "📉 PROGRESSIONE INCONTROLLATA — CONTROLLO ONCOLOGICO A 0%",
-                "sottotitolo": '"La finestra di curabilità si è chiusa."',
-                "descrizione": "I ritardi diagnostici o le terapie sottodosate rispetto alla biologia del tumore hanno portato a diffusione viscerale estesa non più suscettibile di terapie attive.",
-            },
+        _render_quadro_conclusivo_sobrio(
+            state,
+            "Progressione oncologica incontrollata (Controllo Oncologico 0%)",
+            "I ritardi diagnostici o le scelte terapeutiche non adeguate alla biologia della malattia hanno chiuso la finestra di curabilità, portando a progressione sistemica estesa.",
+            chiave,
+            anamnesi_open_key,
+            room,
         )
-        st.markdown(render_box_esito(esito_prog), unsafe_allow_html=True)
-        for idx, step in enumerate(state["percorso"], 1):
-            st.markdown(f"**{idx}. {step['nodo']}** → `{step['scelta']}`")
-        if st.button("🔄 Ripeti Simulazione", use_container_width=True):
-            del room["stati_casi"][chiave]
-            st.session_state[anamnesi_open_key] = False
-            st.rerun()
 
     # 3. Drop-out / Rifiuto cure QoL < 30%
     elif state["qol"] < 30 and nid not in caso["esiti"]:
-        esito_dropout = caso["esiti"].get(
-            "esito_dropout",
-            {
-                "tipo": "rosso",
-                "titolo": "🛑 RIFIUTO DELLE CURE — QoL SOTTO IL 30%",
-                "sottotitolo": '"Dottore, non riesco più a tollerare questa terapia... piuttosto che andare avanti così, meglio smettere."',
-                "descrizione": "Il paziente torna in ambulatorio esausto per il carico di tossicità, sintomi urinari invalidanti o manovre invasive accumulate e decide di interrompere ogni trattamento attivo. Una terapia oncologicamente efficace ma non sostenibile dal paziente è un fallimento clinico.",
-            },
+        _render_quadro_conclusivo_sobrio(
+            state,
+            "Interruzione volontaria delle cure (QoL < 30%)",
+            "Il paziente si presenta in ambulatorio riferendo di non riuscire più a tollerare il carico terapeutico e sceglie di sospendere ogni trattamento attivo.",
+            chiave,
+            anamnesi_open_key,
+            room,
         )
-        st.markdown(render_box_esito(esito_dropout), unsafe_allow_html=True)
-        for idx, step in enumerate(state["percorso"], 1):
-            st.markdown(f"**{idx}. {step['nodo']}** → `{step['scelta']}`")
-        if st.button("🔄 Ripeti Simulazione", use_container_width=True):
-            del room["stati_casi"][chiave]
-            st.session_state[anamnesi_open_key] = False
-            st.rerun()
 
-    # 4. Snodo decisionale attivo (con sala d'attesa sincronizzata)
+    # 4. Snodo decisionale attivo
     elif nid in caso["nodi"]:
         nodo = caso["nodi"][nid]
         st.markdown(f"### {nodo['titolo']}")
@@ -325,7 +371,6 @@ with col_r:
         if nodo.get("immagine") and os.path.exists(nodo["immagine"]):
             st.image(nodo["immagine"], use_container_width=True)
 
-        # Se il partecipante ha già votato, mostra la sala d'attesa sincronizzata
         if "scelta_pendente" in state and role != "master":
             scelta_reg = state["scelta_pendente"]["opt"]["testo"]
             st.success(f"✅ **Scelta registrata:** _{scelta_reg}_")
@@ -338,7 +383,6 @@ with col_r:
             if st.button("✏️ Cambia risposta finché gli altri votano", use_container_width=True):
                 state.pop("scelta_pendente", None)
                 st.rerun()
-            # Polling leggero per far scattare lo snodo successivo appena l'ultimo vota
             time.sleep(2.5)
             st.rerun()
 
@@ -355,7 +399,6 @@ with col_r:
                 if st.form_submit_button("Conferma Scelta ➡️", use_container_width=True):
                     opt = next(o for o in opzioni_ordinate if o["testo"] == scelta)
                     if role == "master":
-                        # Il Master che testa lo scenario avanza subito senza bloccare l'aula
                         state["scelta_pendente"] = {
                             "nodo_id": nid,
                             "nodo_titolo": nodo["titolo"],
@@ -374,22 +417,14 @@ with col_r:
                     st.session_state[anamnesi_open_key] = False
                     st.rerun()
 
-    # 5. Esito finale raggiunto
+    # 5. Esito finale raggiunto al termine del percorso
     elif nid in caso["esiti"]:
         esito = dict(caso["esiti"][nid])
-        if esito.get("tipo") == "bianco" and (state["qol"] < 55 or state["oncologico"] < 65 or state["vitalita"] < 60):
-            esito = {
-                "tipo": "giallo",
-                "titolo": "⚠️ CONTROLLO ONCOLOGICO CON SEQUELE GRAVI",
-                "sottotitolo": '"Hai indovinato la mossa finale, ma il paziente paga gli errori precedenti."',
-                "descrizione": esito["descrizione"] + " Tuttavia, le scelte subottimali nelle fasi iniziali hanno lasciato sequele permanenti sulla qualità di vita o sul controllo di malattia.",
-            }
-
-        st.markdown(render_box_esito(esito), unsafe_allow_html=True)
-        st.info(f"💶 **Costo complessivo del percorso assistenziale per il SSN:** {spesa_fmt}")
-        for idx, step in enumerate(state["percorso"], 1):
-            st.markdown(f"**{idx}. {step['nodo']}** → `{step['scelta']}`")
-        if st.button("🔄 Ripeti Simulazione", use_container_width=True):
-            del room["stati_casi"][chiave]
-            st.session_state[anamnesi_open_key] = False
-            st.rerun()
+        _render_quadro_conclusivo_sobrio(
+            state,
+            "Percorso clinico completato",
+            esito.get("descrizione", "Valuta i parametri clinici finali raggiunti dal paziente."),
+            chiave,
+            anamnesi_open_key,
+            room,
+        )
