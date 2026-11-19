@@ -2,14 +2,45 @@ import importlib
 import os
 import random
 import time
+from datetime import datetime
 import streamlit as st
 from case_builder import render_case_builder
 from font import apply_fonts
 from security import render_regia_master, risolvi_identita_gioco, verifica_accesso
 from valutazione import render_osservatorio_master
 
+try:
+    from google_db import registra_scelta
+    GSHEETS_ATTIVO = True
+except Exception:
+    GSHEETS_ATTIVO = False
+
 st.set_page_config(page_title="2getSIM", page_icon="⚡", layout="wide")
 apply_fonts()
+
+# Nasconde marchio, barra superiore e footer di Streamlit + abilita modalità Web App a schermo intero su tablet
+st.markdown(
+    """
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="2getSIM">
+    <style>
+        #MainMenu {visibility: hidden;}
+        header {visibility: hidden;}
+        footer {visibility: hidden;}
+        .stDeployButton {display: none;}
+        [data-testid="stToolbar"] {display: none !important;}
+        [data-testid="stDecoration"] {display: none !important;}
+        [data-testid="stStatusWidget"] {display: none !important;}
+        .block-container {
+            padding-top: 1.2rem !important;
+            padding-bottom: 1.5rem !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 room, role, uid = verifica_accesso()
 bucket, etichetta = risolvi_identita_gioco(room, role, uid)
@@ -62,7 +93,7 @@ def _is_terminato(stato_run, caso_dict):
     return False
 
 
-def _applica_scelta_in_coda(stato_run):
+def _applica_scelta_in_coda(stato_run, scenario_id="", postazione_id="", room_ref=None):
     pending = stato_run.pop("scelta_pendente", None)
     if not pending:
         return
@@ -83,6 +114,31 @@ def _applica_scelta_in_coda(stato_run):
     )
     stato_run["current_node"] = opt["next"]
 
+    # Registrazione automatica su Google Sheet (esclude gli account docente/master)
+    entita_low = postazione_id.lower()
+    is_docente = entita_low in ("gbadano", "acavo", "smigone") or entita_low.startswith("master")
+    if GSHEETS_ATTIVO and not is_docente:
+        try:
+            r_ref = room_ref or {}
+            registra_scelta(
+                edizione=str(r_ref.get("edizione", f"Corso_{datetime.now().strftime('%Y_%m')}")),
+                scenario=scenario_id,
+                postazione=postazione_id,
+                modalita=str(r_ref.get("modalita", "Aula")),
+                membri=str(stato_run.get("etichetta", postazione_id)),
+                passo=len(stato_run["percorso"]),
+                snodo_id=str(pending["nodo_id"]),
+                scelta=str(opt["testo"]),
+                colore=col_scelta,
+                anamnesi="Sì" if pending["anamnesi_aperta"] else "No",
+                vitalita=stato_run["vitalita"],
+                controllo_onc=stato_run["oncologico"],
+                qol=stato_run["qol"],
+                spesa_ssn=stato_run["spesa_ssn"],
+            )
+        except Exception as e:
+            st.session_state["ultimo_errore_gsheets"] = str(e)
+
 
 def _sincronizza_barriera_aula(room, selected_id, caso_dict, forzata=False):
     pref = f"{selected_id}__"
@@ -94,21 +150,21 @@ def _sincronizza_barriera_aula(room, selected_id, caso_dict, forzata=False):
         if entita.lower() in ("gbadano", "acavo", "smigone") or entita.lower().startswith("master"):
             continue
         if not _is_terminato(v, caso_dict):
-            attivi.append(v)
+            attivi.append((entita, v))
 
     if not attivi:
         return 0, 0, False
 
-    min_step = min(len(v.get("percorso", [])) for v in attivi)
-    in_gioco_questo_passo = [v for v in attivi if len(v.get("percorso", [])) == min_step]
-    pronti = [v for v in in_gioco_questo_passo if "scelta_pendente" in v]
+    min_step = min(len(v.get("percorso", [])) for _, v in attivi)
+    in_gioco_questo_passo = [(ent, v) for ent, v in attivi if len(v.get("percorso", [])) == min_step]
+    pronti = [(ent, v) for ent, v in in_gioco_questo_passo if "scelta_pendente" in v]
 
     tot_attesi = len(in_gioco_questo_passo)
     tot_pronti = len(pronti)
 
     if tot_attesi > 0 and (tot_pronti >= tot_attesi or (forzata and tot_pronti > 0)):
-        for v in pronti:
-            _applica_scelta_in_coda(v)
+        for ent, v in pronti:
+            _applica_scelta_in_coda(v, scenario_id=selected_id, postazione_id=ent, room_ref=room)
         return tot_pronti, tot_attesi, True
 
     return tot_pronti, tot_attesi, False
@@ -233,6 +289,7 @@ caso = mod.CASO
 chiave = f"{selected_id}__{bucket}"
 if chiave not in room["stati_casi"]:
     room["stati_casi"][chiave] = {
+        "etichetta": etichetta,
         "current_node": caso["nodo_iniziale"],
         "vitalita": caso.get("vitalita_iniziale", 100),
         "oncologico": caso.get("oncologico_iniziale", 100),
@@ -308,6 +365,35 @@ with col_l:
             if st.button("⏭️ Forza Avanzamento Ora (ignora assenti)", use_container_width=True):
                 _sincronizza_barriera_aula(room, selected_id, caso, forzata=True)
                 st.rerun()
+
+            st.divider()
+            if GSHEETS_ATTIVO:
+                if st.button("🧪 Testa scrittura su Google Sheet", use_container_width=True):
+                    try:
+                        registra_scelta(
+                            edizione="TEST_CONNESSIONE",
+                            scenario=selected_id,
+                            postazione="REGIA_MASTER",
+                            modalita="Test",
+                            membri=etichetta,
+                            passo=0,
+                            snodo_id="TEST",
+                            scelta="Verifica connessione Google Sheet OK",
+                            colore="verde",
+                            anamnesi="No",
+                            vitalita=100,
+                            controllo_onc=100,
+                            qol=75,
+                            spesa_ssn=0,
+                        )
+                        st.success("✅ Riga di prova scritta su 2getSIM_Database_Congressuale!")
+                    except Exception as err:
+                        st.error(f"Errore scrittura Sheet: {err}")
+            else:
+                st.warning("⚠️ Modulo google_db.py non ancora caricato nel repository.")
+
+            if "ultimo_errore_gsheets" in st.session_state:
+                st.caption(f"⚠️ Ultimo avviso Sheets: {st.session_state['ultimo_errore_gsheets']}")
 
             st.divider()
             nodi = list(caso["nodi"].keys()) + list(caso["esiti"].keys())
@@ -405,7 +491,7 @@ with col_r:
                             "opt": opt,
                             "anamnesi_aperta": st.session_state[anamnesi_open_key],
                         }
-                        _applica_scelta_in_coda(state)
+                        _applica_scelta_in_coda(state, scenario_id=selected_id, postazione_id=bucket, room_ref=room)
                     else:
                         state["scelta_pendente"] = {
                             "nodo_id": nid,
