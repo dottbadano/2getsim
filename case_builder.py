@@ -14,59 +14,48 @@ except Exception:
     GDRIVE_IMG_ATTIVO = False
 
 COLORI_CLINICI = {
-    "⬜ Da assegnare": {
-        "codice": "blu",
-        "d_vit": 0,
-        "d_onc": -5,
-        "d_qol": -5,
-        "costo": 3500,
-        "hex": "#94a3b8",
-        "bg": "#ffffff",
-    },
-    "🟩 Verde — Giusta (Tailored ottimale)": {
+    "🟩 Verde — Esatta (Condotta tailored ottimale)": {
         "codice": "verde",
         "d_vit": 5,
         "d_onc": 15,
         "d_qol": 5,
-        "costo": 1200,
         "hex": "#16a34a",
         "bg": "#dcfce7",
     },
-    "🟦 Blu — Quasi giusta (Ragionevole / Subottimale)": {
+    "🟦 Blu — Ridondante / Inutile (Esame in più, fa perdere tempo)": {
         "codice": "blu",
         "d_vit": 0,
         "d_onc": -5,
         "d_qol": -5,
-        "costo": 3500,
         "hex": "#2563eb",
         "bg": "#dbeafe",
     },
-    "🟨 Gialla — Giusta da Linea Guida ma NON per questo paziente": {
+    "🟨 Gialla — Trappola Linea Guida (Ammessa da LG, ma non per questo paziente)": {
         "codice": "giallo",
         "d_vit": -10,
         "d_onc": -15,
         "d_qol": -25,
-        "costo": 8500,
         "hex": "#ca8a04",
         "bg": "#fef9c3",
     },
-    "🟥 Rossa — Sbagliata / Pericolosa": {
+    "🟥 Rossa — Sbagliata (Errore clinico / Pericolosa)": {
         "codice": "rosso",
         "d_vit": -20,
         "d_onc": -30,
         "d_qol": -20,
-        "costo": 14000,
         "hex": "#dc2626",
         "bg": "#fee2e2",
     },
 }
 
 MAPPA_CODICE_TO_LABEL = {
-    "verde": "🟩 Verde — Giusta (Tailored ottimale)",
-    "blu": "🟦 Blu — Quasi giusta (Ragionevole / Subottimale)",
-    "giallo": "🟨 Gialla — Giusta da Linea Guida ma NON per questo paziente",
-    "rosso": "🟥 Rossa — Sbagliata / Pericolosa",
+    "verde": "🟩 Verde — Esatta (Condotta tailored ottimale)",
+    "blu": "🟦 Blu — Ridondante / Inutile (Esame in più, fa perdere tempo)",
+    "giallo": "🟨 Gialla — Trappola Linea Guida (Ammessa da LG, ma non per questo paziente)",
+    "rosso": "🟥 Rossa — Sbagliata (Errore clinico / Pericolosa)",
 }
+
+ORDINE_DEFAULT_4_CASELLE = ["verde", "blu", "giallo", "rosso"]
 
 
 def _salva_su_github(percorso_repo, contenuto_testo, messaggio_commit):
@@ -133,19 +122,19 @@ def _prossimo_codice_disponibile(existing_files):
     return f"{prossimo:03d}"
 
 
-def _deduci_colore_da_delta(opt):
-    if not opt.get("testo", "").strip() and not opt.get("colore"):
-        return "⬜ Da assegnare"
+def _deduci_colore_da_delta(opt, fallback_codice="blu"):
     if opt.get("colore") in MAPPA_CODICE_TO_LABEL:
         return MAPPA_CODICE_TO_LABEL[opt["colore"]]
+    if not opt.get("testo", "").strip():
+        return MAPPA_CODICE_TO_LABEL.get(fallback_codice, MAPPA_CODICE_TO_LABEL["blu"])
     do, dq, dv = opt.get("d_onc", 0), opt.get("d_qol", 0), opt.get("d_vit", 0)
     if do > 0 and dv >= 0:
-        return "🟩 Verde — Giusta (Tailored ottimale)"
+        return MAPPA_CODICE_TO_LABEL["verde"]
     if dq <= -20 and do >= -15:
-        return "🟨 Gialla — Giusta da Linea Guida ma NON per questo paziente"
+        return MAPPA_CODICE_TO_LABEL["giallo"]
     if dv <= -15 or do <= -25:
-        return "🟥 Rossa — Sbagliata / Pericolosa"
-    return "🟦 Blu — Quasi giusta (Ragionevole / Subottimale)"
+        return MAPPA_CODICE_TO_LABEL["rosso"]
+    return MAPPA_CODICE_TO_LABEL["blu"]
 
 
 def _prossimo_id_snodo(nodi_dict):
@@ -169,9 +158,9 @@ def _raccogli_opzioni_note(dati):
 
 
 def render_case_builder(case_dir="storycase"):
-    st.markdown("## ✍️ Editor Casi Clinici — Scrittura Guidata a 4 Caselle")
+    st.markdown("## ✍️ Editor Casi Clinici — 4 Risposte per Snodo")
     st.caption(
-        "1. Scrivi l'anamnesi • 2. Compila le 4 caselle bianche e assegna il colore • 3. Scegli per ciascuna 'Fine Caso' oppure 'Prossimo Snodo' (nuovo o già esistente)."
+        "Ogni snodo prevede 4 opzioni: 🟩 Verde (Esatta) • 🟦 Blu (Ridondante / perdi tempo) • 🟨 Gialla (Da Linea Guida ma non per questo paziente) • 🟥 Rossa (Sbagliata)."
     )
 
     existing_files = sorted(
@@ -242,7 +231,7 @@ def render_case_builder(case_dir="storycase"):
     with st.expander("🕸️ Mappa del Flusso Clinico (Panoramica Live)", expanded=True):
         st.graphviz_chart(_genera_graphviz_dot(dati, rankdir="LR"), use_container_width=True)
         st.caption(
-            "🟩 Giusta | 🟦 Quasi giusta | 🟨 Trappola Linea Guida (no per questo pz) | 🟥 Sbagliata"
+            "🟩 Esatta | 🟦 Ridondante / perdi tempo | 🟨 Da Linea Guida ma non per questo paziente | 🟥 Sbagliata"
         )
 
     st.markdown("### 🔀 Compilazione Snodo Decisionale")
@@ -308,37 +297,48 @@ def render_case_builder(case_dir="storycase"):
         else:
             st.warning("⚠️ Modulo google_db.py non attivo: verifica la connessione Google Drive.")
 
+    # Garantisce sempre 4 caselle (Verde, Blu, Gialla, Rossa)
     while len(snodo["opzioni"]) < 4:
+        cod_default = ORDINE_DEFAULT_4_CASELLE[len(snodo["opzioni"])]
+        cfg_def = COLORI_CLINICI[MAPPA_CODICE_TO_LABEL[cod_default]]
         snodo["opzioni"].append(
             {
                 "testo": "",
-                "colore": "",
-                "d_vit": 0,
-                "d_onc": -5,
-                "d_qol": -5,
-                "costo": 3500,
-                "next": "esito_parziale",
+                "colore": cod_default,
+                "d_vit": cfg_def["d_vit"],
+                "d_onc": cfg_def["d_onc"],
+                "d_qol": cfg_def["d_qol"],
+                "next": "esito_vittoria" if cod_default == "verde" else "esito_parziale",
             }
         )
 
     opzioni_note = _raccogli_opzioni_note(dati)
     esiti_ids = list(dati["esiti"].keys())
     esiti_labels = {
-        "esito_vittoria": "🏆 Tazza Bianca (Successo Tailored)",
-        "esito_parziale": "⚠️ Risultato Intermedio (Cronicizzazione / Sequele)",
-        "esito_sconfitta": "❌ Tazza Rossa (Fallimento / Complicanza)",
+        "esito_vittoria": "✅ Esito Ottimale (Percorso concluso con successo)",
+        "esito_parziale": "⚠️ Esito Intermedio (Controllo parziale / Sequele)",
+        "esito_sconfitta": "❌ Esito Critico (Fallimento / Complicanza)",
     }
 
-    st.markdown("#### Le 4 Caselle di Scelta")
+    placeholders_4 = [
+        "Scrivi qui l'opzione ESATTA (tailored ottimale per il paziente)...",
+        "Scrivi qui l'opzione RIDONDANTE / INUTILE (esame in più, perdi tempo)...",
+        "Scrivi qui la TRAPPOLA LINEA GUIDA (si può fare da LG, ma non su questo paziente)...",
+        "Scrivi qui l'opzione SBAGLIATA (errore clinico / pericolosa)...",
+    ]
+
+    st.markdown("#### Le 4 Risposte dello Snodo")
     for idx in range(4):
         opt = snodo["opzioni"][idx]
-        label_colore_att = _deduci_colore_da_delta(opt)
+        opt.pop("costo", None)
+        fallback_cod = ORDINE_DEFAULT_4_CASELLE[idx]
+        label_colore_att = _deduci_colore_da_delta(opt, fallback_codice=fallback_cod)
         info_col = COLORI_CLINICI[label_colore_att]
 
         st.markdown(
             f"""
             <div style="border: 2px solid {info_col['hex']}; background-color: {info_col['bg']}; padding: 10px 14px; border-radius: 10px; margin-top: 10px; margin-bottom: 6px; color: #0f172a;">
-                <strong>Casella {idx + 1}</strong> &nbsp;•&nbsp; {label_colore_att}
+                <strong>Opzione {idx + 1}</strong> &nbsp;•&nbsp; {label_colore_att}
             </div>
             """,
             unsafe_allow_html=True,
@@ -349,7 +349,7 @@ def render_case_builder(case_dir="storycase"):
         nuovo_testo = col_txt.text_input(
             f"Testo opzione {idx + 1}",
             value=opt.get("testo", ""),
-            placeholder="Scrivi qui la scelta clinica...",
+            placeholder=placeholders_4[idx],
             key=f"opt_txt_{s_id}_{idx}",
             label_visibility="collapsed",
         )
@@ -370,12 +370,10 @@ def render_case_builder(case_dir="storycase"):
             label_visibility="collapsed",
         )
         cfg = COLORI_CLINICI[scelta_colore]
-        if scelta_colore != "⬜ Da assegnare":
-            opt["colore"] = cfg["codice"]
+        opt["colore"] = cfg["codice"]
         opt["d_vit"] = cfg["d_vit"]
         opt["d_onc"] = cfg["d_onc"]
         opt["d_qol"] = cfg["d_qol"]
-        opt["costo"] = cfg["costo"]
 
         is_fine_caso = opt.get("next") in esiti_ids
         c_mode, c_dest, c_go = st.columns([1.3, 2.0, 0.9])
@@ -390,7 +388,12 @@ def render_case_builder(case_dir="storycase"):
         )
 
         if modo == "🏁 Fine Caso":
-            curr_esito = opt["next"] if opt.get("next") in esiti_ids else "esito_vittoria"
+            default_esito = (
+                "esito_vittoria"
+                if opt["colore"] == "verde"
+                else ("esito_sconfitta" if opt["colore"] == "rosso" else "esito_parziale")
+            )
+            curr_esito = opt["next"] if opt.get("next") in esiti_ids else default_esito
             opt["next"] = c_dest.selectbox(
                 "Esito finale:",
                 esiti_ids,
@@ -430,16 +433,6 @@ def render_case_builder(case_dir="storycase"):
                 if c_go.button("Apri Snodo ✏️", key=f"btn_apri_{s_id}_{idx}", use_container_width=True):
                     st.session_state.builder_active_node = dest_scelta
                     st.rerun()
-
-    with st.expander("🏁 Personalizza Commenti Finali (Tazza Bianca / Gialla / Rossa)", expanded=False):
-        for e_id, esito in dati["esiti"].items():
-            st.markdown(f"**{esiti_labels.get(e_id, e_id)}**")
-            esito["descrizione"] = st.text_area(
-                "Commento conclusivo per l'aula",
-                value=esito["descrizione"],
-                key=f"ed_{e_id}",
-                height=70,
-            )
 
     st.divider()
     dati_puliti = _pulisci_caselle_vuote(dati)
@@ -533,7 +526,8 @@ def _genera_graphviz_dot(dati, rankdir="LR"):
             testo_opt = txt.replace('"', "'")
             if len(testo_opt) > 24:
                 testo_opt = testo_opt[:21] + "..."
-            label_col = _deduci_colore_da_delta(opt)
+            fallback_cod = ORDINE_DEFAULT_4_CASELLE[(idx - 1) % 4]
+            label_col = _deduci_colore_da_delta(opt, fallback_codice=fallback_cod)
             edge_color = COLORI_CLINICI[label_col]["hex"]
             righe.append(
                 f'  "{s_id}" -> "{dest}" [label="{idx}. {testo_opt}", color="{edge_color}", fontcolor="{edge_color}"];'
@@ -547,13 +541,23 @@ def _nuovo_snodo_vuoto(snodo_id, origine_testo=""):
     titolo_default = f"📍 {snodo_id.upper()}"
     if origine_testo:
         titolo_default += f" — Dopo: {origine_testo[:35]}"
+    opzioni_4 = []
+    for cod in ORDINE_DEFAULT_4_CASELLE:
+        cfg = COLORI_CLINICI[MAPPA_CODICE_TO_LABEL[cod]]
+        opzioni_4.append(
+            {
+                "testo": "",
+                "colore": cod,
+                "d_vit": cfg["d_vit"],
+                "d_onc": cfg["d_onc"],
+                "d_qol": cfg["d_qol"],
+                "next": "esito_vittoria" if cod == "verde" else ("esito_sconfitta" if cod == "rosso" else "esito_parziale"),
+            }
+        )
     return {
         "titolo": titolo_default,
         "testo": "Descrivi cosa succede al paziente dopo questa scelta...",
-        "opzioni": [
-            {"testo": "", "colore": "", "d_vit": 0, "d_onc": -5, "d_qol": -5, "costo": 3500, "next": "esito_parziale"}
-            for _ in range(4)
-        ],
+        "opzioni": opzioni_4,
     }
 
 
@@ -574,21 +578,21 @@ def _template_vuoto():
         "esiti": {
             "esito_vittoria": {
                 "tipo": "bianco",
-                "titolo": "🏆 TAZZA BIANCA CONQUISTATA!",
-                "sottotitolo": '"Failure is not an option."',
-                "descrizione": "Gestione clinica tailored ottimale.",
+                "titolo": "ESITO OTTIMALE",
+                "sottotitolo": "Gestione clinica tailored",
+                "descrizione": "Percorso diagnostico-terapeutico ritagliato sulle caratteristiche del paziente.",
             },
             "esito_parziale": {
                 "tipo": "giallo",
-                "titolo": "⚠️ RISULTATO INTERMEDIO",
-                "sottotitolo": "Cronicizzazione con sequele",
-                "descrizione": "Controllo parziale di malattia o scelta non ritagliata sul paziente.",
+                "titolo": "ESITO INTERMEDIO",
+                "sottotitolo": "Controllo parziale o carico non necessario",
+                "descrizione": "Scelta ridondante o non calibrata sul profilo clinico del paziente.",
             },
             "esito_sconfitta": {
                 "tipo": "rosso",
-                "titolo": "❌ TAZZA ROSSA ASSEGNATA!",
-                "sottotitolo": '"Shit... happens."',
-                "descrizione": "Complicanza maggiore o progressione non intercettata.",
+                "titolo": "ESITO CRITICO",
+                "sottotitolo": "Complicanza maggiore o progressione",
+                "descrizione": "Condotta clinica errata o ritardo diagnostico-terapeutico rilevante.",
             },
         },
     }
