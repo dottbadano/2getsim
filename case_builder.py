@@ -58,6 +58,94 @@ MAPPA_CODICE_TO_LABEL = {
 ORDINE_DEFAULT_4_CASELLE = ["verde", "blu", "giallo", "rosso"]
 
 
+def _ricostruisci_contesto_provenienza(dati, target_node_id):
+    """Individua da quali snodi/scelte precedenti si arriva allo snodo corrente."""
+    if target_node_id == dati.get("nodo_iniziale", "snodo1"):
+        return "Snodo iniziale del caso clinico."
+    provenienze = []
+    for s_id, snodo in dati.get("nodi", {}).items():
+        for opt in snodo.get("opzioni", []):
+            if opt.get("next") == target_node_id and opt.get("testo", "").strip():
+                col = opt.get("colore", "").upper()
+                provenienze.append(
+                    f"Proviene da '{snodo.get('titolo', s_id)}' dopo scelta [{col}]: \"{opt['testo']}\""
+                )
+    return " | ".join(provenienze) if provenienze else "Snodo intermedio."
+
+
+def _genera_opzioni_ai_eau(dati, s_id, testo_verde):
+    """Chiama Gemini API per generare Blu, Gialla e Rossa basate su EAU/ESMO e profilo paziente."""
+    api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return False, "Manca GEMINI_API_KEY nei Secrets di Streamlit."
+
+    snodo = dati["nodi"][s_id]
+    provenienza = _ricostruisci_contesto_provenienza(dati, s_id)
+
+    prompt = f"""Sei un uro-oncologo senior esperto di Linee Guida EAU ed ESMO, autore di simulazioni cliniche avanzate per specialisti.
+Devi completare le 3 opzioni distrattori (BLU, GIALLA, ROSSA) di uno snodo decisionale partendo dalla cartella clinica e dall'opzione VERDE (condotta ottimale) già scritta dal docente.
+
+CARTELLA CLINICA & ANAMNESI PAZIENTE:
+{dati.get('scheda_paziente', '')}
+
+CONTESTO DEL RAMO ATTUALE:
+{provenienza}
+
+SNODO DECISIONALE CORRENTE:
+Titolo: {snodo.get('titolo', '')}
+Situazione clinica: {snodo.get('testo', '')}
+
+OPZIONE VERDE (Condotta ottima / tailored per questo specifico paziente):
+"{testo_verde}"
+
+Genera esattamente 3 alternative cliniche plausibili, realistiche, scritte con linguaggio medico-specialistico sintetico e chiaro (max 18-22 parole ciascuna, stesso stile dell'opzione verde, senza etichette o prefissi):
+1. "blu": Opzione RIDONDANTE / INUTILE — un esame strumentale/laboratoristico in più o una procedura ripetuta non dannosa ma superflua che fa perdere tempo e risorse.
+2. "gialla": TRAPPOLA LINEA GUIDA (EAU/ESMO) — una scelta formalmente prevista/ammessa dalle linee guida EAU/ESMO per lo stadio della malattia, ma NON indicata o controindicata in QUESTO specifico paziente per età, comorbidità, fragilità, terapie concomitanti o tossicità attesa.
+3. "rossa": Opzione SBAGLIATA / PERICOLOSA — errore clinico grave, sottotrattamento pericoloso, sovratrattamento tossico o ritardo diagnostico inaccettabile.
+
+Rispondi ESCLUSIVAMENTE con un oggetto JSON valido con queste 3 chiavi esatte:
+{{"blu": "...", "gialla": "...", "rossa": "..."}}"""
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.35,
+            "responseMimeType": "application/json",
+        },
+    }
+
+    ultimo_errore = ""
+    for modello in ("gemini-2.5-flash", "gemini-2.0-flash"):
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modello}:generateContent?key={api_key}"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+                testo_json = raw["candidates"][0]["content"]["parts"][0]["text"]
+                risultato = json.loads(testo_json)
+                if all(k in risultato for k in ("blu", "gialla", "rossa")):
+                    return True, risultato
+                ultimo_errore = "Risposta AI incompleta: riprova."
+        except urllib.error.HTTPError as e:
+            dettaglio = e.read().decode("utf-8", errors="ignore")
+            ultimo_errore = f"Errore API Gemini ({e.code}): {dettaglio[:180]}"
+            if e.code != 404:
+                break
+        except Exception as e:
+            ultimo_errore = f"Errore generazione AI: {e}"
+            break
+
+    return False, ultimo_errore
+
+
 def _salva_su_github(percorso_repo, contenuto_testo, messaggio_commit):
     try:
         token = st.secrets.get("GITHUB_TOKEN", "")
@@ -158,9 +246,9 @@ def _raccogli_opzioni_note(dati):
 
 
 def render_case_builder(case_dir="storycase"):
-    st.markdown("## ✍️ Editor Casi Clinici — 4 Risposte per Snodo")
+    st.markdown("## ✍️ Editor Casi Clinici — Co-Pilota EAU / ESMO")
     st.caption(
-        "Ogni snodo prevede 4 opzioni: 🟩 Verde (Esatta) • 🟦 Blu (Ridondante / perdi tempo) • 🟨 Gialla (Da Linea Guida ma non per questo paziente) • 🟥 Rossa (Sbagliata)."
+        "Scrivi la scelta 🟩 Verde (ottimale per questo paziente) e premi il pulsante AI per generare automaticamente 🟦 Blu, 🟨 Gialla (trappola Linea Guida) e 🟥 Rossa."
     )
 
     existing_files = sorted(
@@ -223,7 +311,7 @@ def render_case_builder(case_dir="storycase"):
             "Sottotitolo", value=dati.get("sottotitolo", "")
         )
         dati["scheda_paziente"] = st.text_area(
-            "Anamnesi & Cartella Clinica (si chiude dopo la prima scelta in aula)",
+            "Anamnesi & Cartella Clinica (inserisci comorbidità e dettagli chiave per tarare le trappole EAU/ESMO)",
             value=dati.get("scheda_paziente", ""),
             height=140,
         )
@@ -249,6 +337,10 @@ def render_case_builder(case_dir="storycase"):
         del dati["nodi"][s_id]
         st.session_state.builder_active_node = list(dati["nodi"].keys())[0]
         st.rerun()
+
+    contesto_ramo = _ricostruisci_contesto_provenienza(dati, s_id)
+    if s_id != dati.get("nodo_iniziale", "snodo1"):
+        st.info(f"🧭 **Contesto di questo ramo:** {contesto_ramo}")
 
     snodo = dati["nodi"][s_id]
     snodo["titolo"] = st.text_input("Titolo dello snodo", value=snodo["titolo"], key=f"t_{s_id}")
@@ -297,7 +389,6 @@ def render_case_builder(case_dir="storycase"):
         else:
             st.warning("⚠️ Modulo google_db.py non attivo: verifica la connessione Google Drive.")
 
-    # Garantisce sempre 4 caselle (Verde, Blu, Gialla, Rossa)
     while len(snodo["opzioni"]) < 4:
         cod_default = ORDINE_DEFAULT_4_CASELLE[len(snodo["opzioni"])]
         cfg_def = COLORI_CLINICI[MAPPA_CODICE_TO_LABEL[cod_default]]
@@ -321,10 +412,10 @@ def render_case_builder(case_dir="storycase"):
     }
 
     placeholders_4 = [
-        "Scrivi qui l'opzione ESATTA (tailored ottimale per il paziente)...",
-        "Scrivi qui l'opzione RIDONDANTE / INUTILE (esame in più, perdi tempo)...",
-        "Scrivi qui la TRAPPOLA LINEA GUIDA (si può fare da LG, ma non su questo paziente)...",
-        "Scrivi qui l'opzione SBAGLIATA (errore clinico / pericolosa)...",
+        "Scrivi qui l'opzione ESATTA / di recupero ottimale per questo snodo...",
+        "Generata da AI (o scrivi): opzione RIDONDANTE / INUTILE...",
+        "Generata da AI (o scrivi): TRAPPOLA LINEA GUIDA EAU/ESMO...",
+        "Generata da AI (o scrivi): opzione SBAGLIATA / PERICOLOSA...",
     ]
 
     st.markdown("#### Le 4 Risposte dello Snodo")
@@ -417,182 +508,4 @@ def render_case_builder(case_dir="storycase"):
                 scelte_snodo,
                 index=idx_dest,
                 format_func=lambda n: n if n == CREA_NUOVO else f"Collegato a: {n} ({dati['nodi'][n].get('titolo', '')[:30]})",
-                key=f"snodo_sel_{s_id}_{idx}",
-                label_visibility="collapsed",
-            )
-
-            if dest_scelta == CREA_NUOVO:
-                if c_go.button("Crea & Apri ➡️", key=f"btn_crea_{s_id}_{idx}", use_container_width=True):
-                    nuovo_id = _prossimo_id_snodo(dati["nodi"])
-                    dati["nodi"][nuovo_id] = _nuovo_snodo_vuoto(nuovo_id, opt["testo"])
-                    opt["next"] = nuovo_id
-                    st.session_state.builder_active_node = nuovo_id
-                    st.rerun()
-            else:
-                opt["next"] = dest_scelta
-                if c_go.button("Apri Snodo ✏️", key=f"btn_apri_{s_id}_{idx}", use_container_width=True):
-                    st.session_state.builder_active_node = dest_scelta
-                    st.rerun()
-
-    st.divider()
-    dati_puliti = _pulisci_caselle_vuote(dati)
-    codice_generato = f"CASO = {pprint.pformat(dati_puliti, width=100, sort_dicts=False)}\n"
-
-    c_save, c_dl = st.columns(2)
-    with c_save:
-        if st.button("🚀 Salva su GitHub e Attiva in Aula", type="primary", use_container_width=True):
-            if not file_id or not dati["titolo"]:
-                st.error("Inserisci almeno il Codice Scenario (es. 002) e il Titolo.")
-            else:
-                os.makedirs(case_dir, exist_ok=True)
-                percorso_locale = os.path.join(case_dir, f"{file_id}.py")
-                with open(percorso_locale, "w", encoding="utf-8") as f:
-                    f.write(codice_generato)
-
-                percorso_repo = f"{case_dir}/{file_id}.py"
-                ok, msg = _salva_su_github(
-                    percorso_repo,
-                    codice_generato,
-                    f"Salvataggio caso clinico {file_id} da 2getSIM Editor",
-                )
-                if ok:
-                    st.success(f"✅ {msg} Ora è selezionabile in aula.")
-                else:
-                    st.warning(f"⚠️ Salvato in locale nella sessione attuale, ma non su GitHub: {msg}")
-
-    with c_dl:
-        st.download_button(
-            label=f"⬇️ Scarica copia {file_id or 'caso'}.py",
-            data=codice_generato,
-            file_name=f"{file_id or 'caso'}.py",
-            mime="text/x-python",
-            use_container_width=True,
-        )
-
-
-def _pulisci_caselle_vuote(dati):
-    copia = json.loads(json.dumps(dati))
-    for s_id, snodo in copia["nodi"].items():
-        valide = [o for o in snodo["opzioni"] if o.get("testo", "").strip()]
-        if valide:
-            snodo["opzioni"] = valide
-    return copia
-
-
-def _genera_graphviz_dot(dati, rankdir="LR"):
-    righe = [
-        "digraph G {",
-        f'  rankdir="{rankdir}";',
-        '  bgcolor="transparent";',
-        '  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=11, margin="0.16,0.10"];',
-        '  edge [fontname="Inter,Arial", fontsize=9, penwidth=1.6];',
-    ]
-
-    for s_id, snodo in dati.get("nodi", {}).items():
-        titolo_breve = snodo.get("titolo", s_id).replace('"', "'")
-        if len(titolo_breve) > 32:
-            titolo_breve = titolo_breve[:29] + "..."
-        img_tag = " 🖼️" if snodo.get("immagine") else ""
-        label = f"{s_id}{img_tag}\\n{titolo_breve}"
-
-        if s_id == st.session_state.get("builder_active_node"):
-            fill, border, fontcol = "#e0e7ff", "#4338ca", "#1e1b4b"
-        else:
-            fill, border, fontcol = "#f8fafc", "#475569", "#0f172a"
-
-        righe.append(
-            f'  "{s_id}" [label="{label}", fillcolor="{fill}", color="{border}", penwidth=1.8, fontcolor="{fontcol}"];'
-        )
-
-    for e_id, esito in dati.get("esiti", {}).items():
-        tipo = esito.get("tipo", "rosso")
-        if tipo == "bianco":
-            fill, border, fontcol = "#dcfce7", "#16a34a", "#14532d"
-        elif tipo == "giallo":
-            fill, border, fontcol = "#fef9c3", "#ca8a04", "#713f12"
-        else:
-            fill, border, fontcol = "#fee2e2", "#dc2626", "#7f1d1d"
-        label = f"{esito.get('titolo', e_id)[:26]}"
-        righe.append(
-            f'  "{e_id}" [label="{label}", shape=oval, fillcolor="{fill}", color="{border}", penwidth=2, fontcolor="{fontcol}"];'
-        )
-
-    for s_id, snodo in dati.get("nodi", {}).items():
-        for idx, opt in enumerate(snodo.get("opzioni", []), 1):
-            txt = opt.get("testo", "").strip()
-            if not txt:
-                continue
-            dest = opt.get("next", "")
-            testo_opt = txt.replace('"', "'")
-            if len(testo_opt) > 24:
-                testo_opt = testo_opt[:21] + "..."
-            fallback_cod = ORDINE_DEFAULT_4_CASELLE[(idx - 1) % 4]
-            label_col = _deduci_colore_da_delta(opt, fallback_codice=fallback_cod)
-            edge_color = COLORI_CLINICI[label_col]["hex"]
-            righe.append(
-                f'  "{s_id}" -> "{dest}" [label="{idx}. {testo_opt}", color="{edge_color}", fontcolor="{edge_color}"];'
-            )
-
-    righe.append("}")
-    return "\n".join(righe)
-
-
-def _nuovo_snodo_vuoto(snodo_id, origine_testo=""):
-    titolo_default = f"📍 {snodo_id.upper()}"
-    if origine_testo:
-        titolo_default += f" — Dopo: {origine_testo[:35]}"
-    opzioni_4 = []
-    for cod in ORDINE_DEFAULT_4_CASELLE:
-        cfg = COLORI_CLINICI[MAPPA_CODICE_TO_LABEL[cod]]
-        opzioni_4.append(
-            {
-                "testo": "",
-                "colore": cod,
-                "d_vit": cfg["d_vit"],
-                "d_onc": cfg["d_onc"],
-                "d_qol": cfg["d_qol"],
-                "next": "esito_vittoria" if cod == "verde" else ("esito_sconfitta" if cod == "rosso" else "esito_parziale"),
-            }
-        )
-    return {
-        "titolo": titolo_default,
-        "testo": "Descrivi cosa succede al paziente dopo questa scelta...",
-        "opzioni": opzioni_4,
-    }
-
-
-def _template_vuoto():
-    return {
-        "badge": "ARENA URO-ONCOLOGICA",
-        "descrizione_master": "",
-        "titolo": "",
-        "sottotitolo": "",
-        "nodo_iniziale": "snodo1",
-        "vitalita_iniziale": 100,
-        "oncologico_iniziale": 100,
-        "qol_iniziale": 75,
-        "scheda_paziente": "* **Paziente:** \n* **Anamnesi patologica:** \n* **Terapia domiciliare:** \n* **Anamnesi familiare:** \n* **Esordio & Esami:** ",
-        "nodi": {
-            "snodo1": _nuovo_snodo_vuoto("snodo1"),
-        },
-        "esiti": {
-            "esito_vittoria": {
-                "tipo": "bianco",
-                "titolo": "ESITO OTTIMALE",
-                "sottotitolo": "Gestione clinica tailored",
-                "descrizione": "Percorso diagnostico-terapeutico ritagliato sulle caratteristiche del paziente.",
-            },
-            "esito_parziale": {
-                "tipo": "giallo",
-                "titolo": "ESITO INTERMEDIO",
-                "sottotitolo": "Controllo parziale o carico non necessario",
-                "descrizione": "Scelta ridondante o non calibrata sul profilo clinico del paziente.",
-            },
-            "esito_sconfitta": {
-                "tipo": "rosso",
-                "titolo": "ESITO CRITICO",
-                "sottotitolo": "Complicanza maggiore o progressione",
-                "descrizione": "Condotta clinica errata o ritardo diagnostico-terapeutico rilevante.",
-            },
-        },
-    }
+                key=f"sn
