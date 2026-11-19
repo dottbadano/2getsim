@@ -10,7 +10,7 @@ from security import render_regia_master, risolvi_identita_gioco, verifica_acces
 from valutazione import render_osservatorio_master
 
 try:
-    from google_db import registra_scelta
+    from google_db import registra_scelta, scarica_immagine_drive
     GSHEETS_ATTIVO = True
 except Exception:
     GSHEETS_ATTIVO = False
@@ -454,8 +454,15 @@ with col_r:
         nodo = caso["nodi"][nid]
         st.markdown(f"### {nodo['titolo']}")
         st.write(nodo["testo"])
-        if nodo.get("immagine") and os.path.exists(nodo["immagine"]):
-            st.image(nodo["immagine"], use_container_width=True)
+
+        img_ref = nodo.get("immagine", "")
+        if img_ref.startswith("drive:") and GSHEETS_ATTIVO:
+            try:
+                st.image(scarica_immagine_drive(img_ref), use_container_width=True)
+            except Exception:
+                st.warning("⚠️ Immagine radiologica non raggiungibile su Drive.")
+        elif img_ref and os.path.exists(img_ref):
+            st.image(img_ref, use_container_width=True)
 
         if "scelta_pendente" in state and role != "master":
             scelta_reg = state["scelta_pendente"]["opt"]["testo"]
