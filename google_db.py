@@ -1,4 +1,6 @@
 import io
+import json
+import urllib.request
 from datetime import datetime
 import gspread
 import streamlit as st
@@ -11,6 +13,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/spreadsheets",
 ]
+
+SOTTOCARTELLE_BIBLIO = ["EAU", "ESMO", "Farmaci e Studi Clinici"]
 
 
 @st.cache_resource
@@ -122,3 +126,67 @@ def scarica_immagine_drive(drive_ref: str) -> bytes:
     while not done:
         _, done = downloader.next_chunk()
     return buf.getvalue()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def elenca_documenti_bibliografia() -> list:
+    """Crea se mancanti le cartelle Bibliografia (EAU, ESMO, Farmaci e Studi Clinici) ed elenca i PDF."""
+    service = get_drive_service()
+    root_id = _trova_o_crea_cartella(service, "2getSIM_Congresso")
+    biblio_id = _trova_o_crea_cartella(service, "Bibliografia", parent_id=root_id)
+
+    documenti = []
+    for sub in SOTTOCARTELLE_BIBLIO:
+        sub_id = _trova_o_crea_cartella(service, sub, parent_id=biblio_id)
+        q = (
+            f"'{sub_id}' in parents and trashed = false "
+            "and (mimeType = 'application/pdf' or mimeType = 'text/plain')"
+        )
+        res = service.files().list(q=q, pageSize=50, fields="files(id, name, mimeType)").execute()
+        for f in res.get("files", []):
+            documenti.append(
+                {
+                    "id": f["id"],
+                    "name": f["name"],
+                    "mimeType": f.get("mimeType", "application/pdf"),
+                    "categoria": sub,
+                }
+            )
+    return documenti
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def carica_file_drive_su_gemini(drive_file_id: str, file_name: str, mime_type: str, api_key: str) -> str:
+    """Scarica il PDF da Drive e lo carica sulla Gemini Files API (cache 24h) restituendo il file_uri."""
+    service = get_drive_service()
+    request = service.files().get_media(fileId=drive_file_id)
+    buf = io.BytesIO()
+    downloader = MediaIoBaseDownload(buf, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    file_bytes = buf.getvalue()
+
+    boundary = "----2getSIMBoundary7MA4YWxkTrZu0gW"
+    meta_json = json.dumps({"file": {"display_name": file_name}}).encode("utf-8")
+    body = (
+        f"--{boundary}\r\n"
+        f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+    ).encode("utf-8") + meta_json + (
+        f"\r\n--{boundary}\r\n"
+        f"Content-Type: {mime_type}\r\n\r\n"
+    ).encode("utf-8") + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    upload_url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?uploadType=multipart&key={api_key}"
+    req = urllib.request.Request(
+        upload_url,
+        data=body,
+        headers={
+            "Content-Type": f"multipart/related; boundary={boundary}",
+            "x-goog-api-key": api_key,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        res_data = json.loads(resp.read().decode("utf-8"))
+        return res_data["file"]["uri"]
