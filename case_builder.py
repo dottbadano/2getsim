@@ -62,6 +62,50 @@ MAPPA_CODICE_TO_LABEL = {
 
 ORDINE_DEFAULT_4_CASELLE = ["verde", "blu", "giallo", "rosso"]
 
+AMBITI_PATOLOGIA = {
+    "vescica": "🫧 Vescica / Carcinoma Uroteliale",
+    "prostata": "🩺 Prostata",
+}
+
+KEYWORDS_VESCICA = (
+    "vescic", "bladder", "nmibc", "mibc", "urotel", "urothel", "utuc",
+    "enfortumab", "padcev", "pembrolizumab", "keytruda", "avelumab", "bavencio",
+    "durvalumab", "imfinzi", "nivolumab", "opdivo", "erdafitinib", "balversa",
+    "cisplat", "carboplat", "gemcitab", "mitomicin", "mitomycin", "bcg",
+    "nadofaragene", "cretostimogene", "nogapendekin", "ev-302", "niagara",
+    "checkmate-274", "javelin", "ambassador", "thor", "sunrise",
+)
+
+KEYWORDS_PROSTATA = (
+    "prostat", "mcrpc", "mcspc", "mhspc", "nmcrpc", "bcr",
+    "apalutamid", "erleada", "darolutamid", "nubeqa", "enzalutamid", "xtandi",
+    "abirateron", "zytiga", "olaparib", "lynparza", "talazoparib", "talzenna",
+    "niraparib", "akeega", "docetaxel", "taxotere", "cabazitaxel", "jevtana",
+    "eligard", "leuprorelin", "enantone", "decapeptyl", "triptorelin",
+    "degarelix", "firmagon", "relugolix", "orgovyx", "bicalutamid", "casodex",
+    "xofigo", "radium", "radio-223", "pluvicto", "lutezio", "lutetium", "psma",
+    "peace", "aranote", "arasens", "titan", "latitude", "stampede", "propel",
+    "magnitude", "talapro", "vision", "psmafore", "proteus", "dasl", "embark",
+    "capitello", "capivasertib",
+)
+
+
+def _seleziona_documenti_per_ambito(tutti_docs, ambito):
+    """Seleziona silenziosamente tutti i PDF della biblioteca Drive pertinenti all'organo."""
+    selezionati = []
+    for doc in tutti_docs:
+        nome_low = doc["name"].lower()
+        is_vescica = any(k in nome_low for k in KEYWORDS_VESCICA)
+        is_prostata = any(k in nome_low for k in KEYWORDS_PROSTATA)
+
+        if ambito == "vescica":
+            if is_vescica or not is_prostata:
+                selezionati.append(doc)
+        else:
+            if is_prostata or not is_vescica:
+                selezionati.append(doc)
+    return selezionati
+
 
 def _ricostruisci_contesto_provenienza(dati, target_node_id):
     """Individua da quali snodi/scelte precedenti si arriva allo snodo corrente."""
@@ -78,41 +122,70 @@ def _ricostruisci_contesto_provenienza(dati, target_node_id):
     return " | ".join(provenienze) if provenienze else "Snodo intermedio."
 
 
-def _genera_opzioni_ai_eau(dati, s_id, testo_verde, docs_selezionati=None):
-    """Chiama Gemini API usando opzionalmente i PDF della cartella Bibliografia su Drive."""
+def _genera_opzioni_ai_eau(dati, s_id, testo_verde):
+    """Chiama Gemini API incrociando automaticamente tutta la biblioteca dell'organo scelto."""
     api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         return False, "Manca GEMINI_API_KEY nei Secrets di Streamlit."
 
     snodo = dati["nodi"][s_id]
     provenienza = _ricostruisci_contesto_provenienza(dati, s_id)
+    ambito = dati.get("ambito_patologia", "vescica")
+
+    docs_selezionati = []
+    if GDRIVE_IMG_ATTIVO:
+        try:
+            tutti_docs = elenca_documenti_bibliografia()
+            docs_selezionati = _seleziona_documenti_per_ambito(tutti_docs, ambito)
+        except Exception:
+            docs_selezionati = []
+
+    if ambito == "vescica":
+        regole_ambito = (
+            "AMBITO CLINICO: CARCINOMA UROTELIALE / VESCICA.\n"
+            "Incrocia autonomamente nella seguente gerarchia:\n"
+            "1. Linee Guida EAU (sia NMIBC che MIBC/Metastatico).\n"
+            "2. Linee Guida ESMO per Carcinoma Uroteliale / Vescica e relativi eUpdate.\n"
+            "3. Schede Tecniche (RCP) dei farmaci citati nelle linee guida o nello snodo (controindicazioni, funzione renale/eGFR, neuropatia, diabete, scompenso cardiaco, tossicità).\n"
+            "4. Studi clinici più recenti allegati che possono modificare o affinare l'impiego di un farmaco nella pratica."
+        )
+    else:
+        regole_ambito = (
+            "AMBITO CLINICO: CARCINOMA DELLA PROSTATA.\n"
+            "Incrocia autonomamente nella seguente gerarchia:\n"
+            "1. Linee Guida EAU Prostate Cancer.\n"
+            "2. Linee Guida ESMO Prostate Cancer (Localizzato e Avanzato/Metastatico).\n"
+            "3. Schede Tecniche (RCP) dei farmaci citati nelle linee guida o nello snodo (interazioni farmacologiche, rischio cardiovascolare/metabolico, epatico, neurologico, stato mutazionale BRCA/HRR).\n"
+            "4. Studi clinici più recenti allegati che possono modificare o affinare l'impiego di un farmaco nella pratica."
+        )
 
     parti_contenuto = []
     nomi_fonti = []
-    if docs_selezionati and GDRIVE_IMG_ATTIVO:
-        for doc in docs_selezionati:
-            try:
-                f_uri = carica_file_drive_su_gemini(
-                    doc["id"], doc["name"], doc["mimeType"], api_key
-                )
-                parti_contenuto.append(
-                    {"file_data": {"mime_type": doc["mimeType"], "file_uri": f_uri}}
-                )
-                nomi_fonti.append(f"[{doc['categoria']}] {doc['name']}")
-            except Exception as err:
-                return False, f"Errore lettura documento '{doc['name']}' da Drive: {err}"
+    for doc in docs_selezionati:
+        try:
+            f_uri = carica_file_drive_su_gemini(
+                doc["id"], doc["name"], doc["mimeType"], api_key
+            )
+            parti_contenuto.append(
+                {"file_data": {"mime_type": doc["mimeType"], "file_uri": f_uri}}
+            )
+            nomi_fonti.append(f"[{doc['categoria']}] {doc['name']}")
+        except Exception:
+            continue
 
     istruzione_fonti = ""
     if nomi_fonti:
         istruzione_fonti = (
-            "\nDOCUMENTI DI RIFERIMENTO ALLEGATI (attieniti rigorosamente alle raccomandazioni, "
-            "criteri di eleggibilità, posologie e controindicazioni riportate in questi file):\n- "
+            "\nBIBLIOTECA DOCUMENTALE DISPONIBILE (attieniti rigorosamente a raccomandazioni EAU/ESMO, "
+            "criteri di eleggibilità, RCP dei farmaci e risultati degli studi clinici contenuti in questi file):\n- "
             + "\n- ".join(nomi_fonti)
             + "\n"
         )
 
     prompt = f"""Sei un uro-oncologo senior esperto di Linee Guida EAU ed ESMO, autore di simulazioni cliniche avanzate per specialisti.
 Devi completare le 3 opzioni distrattori (BLU, GIALLA, ROSSA) di uno snodo decisionale partendo dalla cartella clinica e dall'opzione VERDE (condotta ottimale) già scritta dal docente.
+
+{regole_ambito}
 {istruzione_fonti}
 CARTELLA CLINICA & ANAMNESI PAZIENTE:
 {dati.get('scheda_paziente', '')}
@@ -127,9 +200,9 @@ Situazione clinica: {snodo.get('testo', '')}
 OPZIONE VERDE (Condotta ottima / tailored per questo specifico paziente):
 "{testo_verde}"
 
-Genera esattamente 3 alternative cliniche plausibili, realistiche, scritte con linguaggio medico-specialistico sintetico e chiaro (max 18-22 parole ciascuna, stesso stile dell'opzione verde, senza etichette o prefissi):
+Genera esattamente 3 alternative cliniche plausibili, realistiche, scritte con linguaggio medico-specialistico sintetico e chiaro (max 18-24 parole ciascuna, stesso stile dell'opzione verde, senza etichette o prefissi):
 1. "blu": Opzione RIDONDANTE / INUTILE — un esame strumentale/laboratoristico in più o una procedura ripetuta non dannosa ma superflua che fa perdere tempo e risorse.
-2. "gialla": TRAPPOLA LINEA GUIDA (EAU/ESMO) — una scelta formalmente prevista/ammessa dalle linee guida EAU/ESMO per lo stadio della malattia, ma NON indicata o controindicata in QUESTO specifico paziente per età, comorbidità, fragilità, terapie concomitanti o tossicità attesa.
+2. "gialla": TRAPPOLA LINEA GUIDA (EAU/ESMO) — una scelta formalmente prevista/ammessa dalle linee guida EAU/ESMO per lo stadio della malattia, ma NON indicata o controindicata in QUESTO specifico paziente per età, comorbidità, fragilità, schede tecniche dei farmaci o evidenze degli studi recenti.
 3. "rossa": Opzione SBAGLIATA / PERICOLOSA — errore clinico grave, sottotrattamento pericoloso, sovratrattamento tossico o ritardo diagnostico inaccettabile.
 
 Rispondi ESCLUSIVAMENTE con un oggetto JSON valido con queste 3 chiavi esatte:
@@ -158,7 +231,7 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON valido con queste 3 chiavi esatte:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=45) as resp:
+            with urllib.request.urlopen(req, timeout=90) as resp:
                 raw = json.loads(resp.read().decode("utf-8"))
                 testo_json = raw["candidates"][0]["content"]["parts"][0]["text"]
                 risultato = json.loads(testo_json)
@@ -277,9 +350,9 @@ def _raccogli_opzioni_note(dati):
 
 
 def render_case_builder(case_dir="storycase"):
-    st.markdown("## ✍️ Editor Casi Clinici — Co-Pilota EAU / ESMO & Bibliografia Drive")
+    st.markdown("## ✍️ Editor Casi Clinici")
     st.caption(
-        "Scrivi la scelta 🟩 Verde, seleziona eventuali PDF dalla cartella 'Bibliografia' su Drive e genera automaticamente 🟦 Blu, 🟨 Gialla e 🟥 Rossa."
+        "Seleziona l'organo, compila l'anamnesi e scrivi la risposta 🟩 Verde: l'AI genera in autonomia 🟦 Blu, 🟨 Gialla e 🟥 Rossa incrociando linee guida, farmaci e studi."
     )
 
     existing_files = sorted(
@@ -322,7 +395,20 @@ def render_case_builder(case_dir="storycase"):
     if st.session_state.builder_active_node not in lista_nodi:
         st.session_state.builder_active_node = lista_nodi[0]
 
-    with st.expander("1️⃣ Anamnesi & Intestazione Caso", expanded=True):
+    with st.expander("1️⃣ Organo, Anamnesi & Intestazione Caso", expanded=True):
+        ambito_attuale = dati.get("ambito_patologia", "vescica")
+        if ambito_attuale not in AMBITI_PATOLOGIA:
+            ambito_attuale = "vescica"
+
+        ambito_scelto = st.radio(
+            "Organo:",
+            list(AMBITI_PATOLOGIA.keys()),
+            index=list(AMBITI_PATOLOGIA.keys()).index(ambito_attuale),
+            format_func=lambda k: AMBITI_PATOLOGIA[k],
+            horizontal=True,
+        )
+        dati["ambito_patologia"] = ambito_scelto
+
         c1, c2 = st.columns([1, 2])
         file_id = c1.text_input(
             "Codice Scenario (es. 002, 003)", value=st.session_state.builder_file_id
@@ -342,7 +428,7 @@ def render_case_builder(case_dir="storycase"):
             "Sottotitolo", value=dati.get("sottotitolo", "")
         )
         dati["scheda_paziente"] = st.text_area(
-            "Anamnesi & Cartella Clinica (inserisci comorbidità e dettagli chiave per tarare le trappole EAU/ESMO)",
+            "Anamnesi & Cartella Clinica (inserisci comorbidità, eGFR e dettagli chiave del paziente)",
             value=dati.get("scheda_paziente", ""),
             height=140,
         )
@@ -445,7 +531,7 @@ def render_case_builder(case_dir="storycase"):
     placeholders_4 = [
         "Scrivi qui l'opzione ESATTA / di recupero ottimale per questo snodo...",
         "Generata da AI (o scrivi): opzione RIDONDANTE / INUTILE...",
-        "Generata da AI (o scrivi): TRAPPOLA LINEA GUIDA EAU/ESMO...",
+        "Generata da AI (o scrivi): TRAPPOLA LINEA GUIDA...",
         "Generata da AI (o scrivi): opzione SBAGLIATA / PERICOLOSA...",
     ]
 
@@ -557,29 +643,8 @@ def render_case_builder(case_dir="storycase"):
                     st.rerun()
 
         if idx == 0:
-            docs_disponibili = []
-            if GDRIVE_IMG_ATTIVO:
-                try:
-                    docs_disponibili = elenca_documenti_bibliografia()
-                except Exception:
-                    docs_disponibili = []
-
-            c_bib1, c_bib2 = st.columns([4, 1])
-            opzioni_docs = {f"[{d['categoria']}] {d['name']}": d for d in docs_disponibili}
-            scelte_docs_labels = c_bib1.multiselect(
-                "📚 Fonti PDF da Bibliografia Drive (EAU / ESMO / Farmaci & Studi — opzionale):",
-                list(opzioni_docs.keys()),
-                placeholder="Lascia vuoto per usare EAU/ESMO standard oppure scegli uno o più PDF da Drive...",
-                key=f"biblio_sel_{s_id}",
-            )
-            if c_bib2.button("🔄 Aggiorna PDF", key=f"ref_biblio_{s_id}", use_container_width=True):
-                elenca_documenti_bibliografia.clear()
-                st.rerun()
-
-            docs_scelti = [opzioni_docs[lbl] for lbl in scelte_docs_labels]
-
             if st.button(
-                "✨ Genera automaticamente 🟦 Blu, 🟨 Gialla e 🟥 Rossa da questa scelta Verde",
+                "✨ Genera automaticamente 🟦 Blu, 🟨 Gialla e 🟥 Rossa",
                 type="primary",
                 key=f"btn_ai_{s_id}",
                 use_container_width=True,
@@ -588,15 +653,8 @@ def render_case_builder(case_dir="storycase"):
                 if not testo_verde_att:
                     st.warning("⚠️ Scrivi prima la scelta ideale nella casella 🟩 Verde qui sopra.")
                 else:
-                    msg_spinner = (
-                        f"Lettura di {len(docs_scelti)} PDF da Drive e generazione opzioni..."
-                        if docs_scelti
-                        else "Consultazione linee guida EAU/ESMO e profilo paziente in corso..."
-                    )
-                    with st.spinner(msg_spinner):
-                        ok_ai, res_ai = _genera_opzioni_ai_eau(
-                            dati, s_id, testo_verde_att, docs_selezionati=docs_scelti
-                        )
+                    with st.spinner("Generazione opzioni calibrate su linee guida, farmaci e studi..."):
+                        ok_ai, res_ai = _genera_opzioni_ai_eau(dati, s_id, testo_verde_att)
                     if ok_ai:
                         snodo["opzioni"][1]["testo"] = res_ai["blu"]
                         snodo["opzioni"][2]["testo"] = res_ai["gialla"]
@@ -738,6 +796,7 @@ def _nuovo_snodo_vuoto(snodo_id, origine_testo=""):
 def _template_vuoto():
     return {
         "badge": "ARENA URO-ONCOLOGICA",
+        "ambito_patologia": "vescica",
         "descrizione_master": "",
         "titolo": "",
         "sottotitolo": "",
