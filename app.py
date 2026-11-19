@@ -74,12 +74,6 @@ def _deduci_colore_opzione(opt):
     return "blu"
 
 
-def _calcola_costo_opzione(opt):
-    if "costo" in opt:
-        return int(opt["costo"])
-    return {"verde": 1200, "blu": 3500, "giallo": 8500, "rosso": 14000}[_deduci_colore_opzione(opt)]
-
-
 def _is_terminato(stato_run, caso_dict):
     nid = stato_run.get("current_node", "")
     if nid in caso_dict.get("esiti", {}):
@@ -102,7 +96,6 @@ def _applica_scelta_in_coda(stato_run, scenario_id="", postazione_id="", room_re
     stato_run["vitalita"] = max(0, min(100, stato_run["vitalita"] + opt.get("d_vit", 0)))
     stato_run["oncologico"] = max(0, min(100, stato_run["oncologico"] + opt.get("d_onc", 0)))
     stato_run["qol"] = max(0, min(100, stato_run["qol"] + opt.get("d_qol", 0)))
-    stato_run["spesa_ssn"] = stato_run.get("spesa_ssn", 0) + _calcola_costo_opzione(opt)
     stato_run["percorso"].append(
         {
             "nodo_id": pending["nodo_id"],
@@ -134,7 +127,7 @@ def _applica_scelta_in_coda(stato_run, scenario_id="", postazione_id="", room_re
                 vitalita=stato_run["vitalita"],
                 controllo_onc=stato_run["oncologico"],
                 qol=stato_run["qol"],
-                spesa_ssn=stato_run["spesa_ssn"],
+                spesa_ssn=0,
             )
         except Exception as e:
             st.session_state["ultimo_errore_gsheets"] = str(e)
@@ -179,11 +172,10 @@ def _colore_barra(valore):
 
 
 def _render_quadro_conclusivo_sobrio(state, stato_clinico_label, nota_clinica, chiave, anamnesi_open_key, room):
-    """Mostra il quadro finale sobrio con le 3 barre cliniche in grande evidenza, spesa SSN e cronologia."""
+    """Mostra il quadro finale sobrio con le 3 barre cliniche in grande evidenza e la cronologia."""
     vit = max(0, min(100, state.get("vitalita", 0)))
     onc = max(0, min(100, state.get("oncologico", 0)))
     qol = max(0, min(100, state.get("qol", 0)))
-    spesa_fmt = f"{state.get('spesa_ssn', 0):,}".replace(",", ".") + " €"
 
     st.markdown(
         f"""
@@ -224,8 +216,7 @@ def _render_quadro_conclusivo_sobrio(state, stato_clinico_label, nota_clinica, c
                 </div>
             </div>
 
-            <div style="border-top: 1px solid #cbd5e1; padding-top: 0.85rem; display: flex; justify-content: space-between; align-items: center; color: #1e293b; font-size: 0.95rem;">
-                <span>💶 <strong>Impatto economico percorso (SSN):</strong> {spesa_fmt}</span>
+            <div style="border-top: 1px solid #cbd5e1; padding-top: 0.85rem; color: #1e293b; font-size: 0.95rem;">
                 <span>📋 <strong>Consultazioni anamnesi:</strong> {state.get('consultazioni_anamnesi', 0)}</span>
             </div>
         </div>
@@ -294,7 +285,6 @@ if chiave not in room["stati_casi"]:
         "vitalita": caso.get("vitalita_iniziale", 100),
         "oncologico": caso.get("oncologico_iniziale", 100),
         "qol": caso.get("qol_iniziale", 75),
-        "spesa_ssn": caso.get("spesa_iniziale", 0),
         "percorso": [],
         "ordine_opzioni": {},
         "consultazioni_anamnesi": 0,
@@ -328,14 +318,10 @@ with col_l:
     onc_c = max(0, min(100, state["oncologico"]))
     qol_c = max(0, min(100, state["qol"]))
 
-    m1, m2 = st.columns(2)
+    m1, m2, m3 = st.columns(3)
     m1.metric("❤️ Vitalità", f"{vit_c}%")
     m2.metric("🎯 Controllo Onc.", f"{onc_c}%")
-
-    m3, m4 = st.columns(2)
     m3.metric("🌿 Qualità di Vita", f"{qol_c}%")
-    spesa_fmt = f"{state.get('spesa_ssn', 0):,}".replace(",", ".") + " €"
-    m4.metric("💶 Spesa SSN", spesa_fmt)
 
     if 30 <= qol_c < 40 and not _is_terminato(state, caso):
         st.warning("⚠️ Qualità di Vita critica: il paziente fatica a tollerare il carico terapeutico.")
@@ -407,10 +393,9 @@ with col_l:
             for k, v in room["stati_casi"].items():
                 if k.startswith(pref):
                     cons = v.get("consultazioni_anamnesi", 0)
-                    spesa_k = f"{v.get('spesa_ssn', 0):,}".replace(",", ".") + " €"
                     stato_voto = "⏳ Pronta" if "scelta_pendente" in v else "✍️ Vota"
                     st.caption(
-                        f"• **{k[len(pref):]}** [{stato_voto}] → `{v['current_node']}` | V:{v['vitalita']}% O:{v['oncologico']}% Q:{v['qol']}% | 💶 {spesa_k} | Anamn: {cons}x"
+                        f"• **{k[len(pref):]}** [{stato_voto}] → `{v['current_node']}` | V:{v['vitalita']}% O:{v['oncologico']}% Q:{v['qol']}% | Anamn: {cons}x"
                     )
 
 with col_r:
