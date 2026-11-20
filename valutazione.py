@@ -18,6 +18,7 @@ def aggrega_metriche_runs(lista_runs):
         somma_qol += max(0, min(100, r.get("qol", 75)))
         somma_spesa += r.get("spesa_ssn", 0)
         somma_anamnesi += r.get("consultazioni_anamnesi", 0)
+
         for step in r.get("percorso", []):
             col = step.get("colore", "blu")
             conteggi[col] = conteggi.get(col, 0) + 1
@@ -35,7 +36,7 @@ def aggrega_metriche_runs(lista_runs):
         "avg_vit": round(somma_vit / denom_runs, 1),
         "avg_onc": round(somma_onc / denom_runs, 1),
         "avg_qol": round(somma_qol / denom_runs, 1),
-        "avg_spesa": round(somma_spesa / denom_runs),
+        "avg_spesa": round(somma_spesa / denom_runs, 1),
         "avg_anamnesi": round(somma_anamnesi / denom_runs, 1),
     }
 
@@ -48,6 +49,7 @@ def analizza_profilo_comportamentale(stato_run):
 
     conteggi = {"verde": 0, "blu": 0, "giallo": 0, "rosso": 0}
     esami_ridondanti = 0
+
     for step in percorso:
         col = step.get("colore", "blu")
         conteggi[col] = conteggi.get(col, 0) + 1
@@ -63,9 +65,13 @@ def analizza_profilo_comportamentale(stato_run):
     alert = []
 
     if conteggi["giallo"] >= 2 or (conteggi["giallo"] >= 1 and cons_anamnesi == 0 and tot >= 2):
-        alert.append("🚜 **Effetto Bulldozer (Linee Guida a testa bassa):** applica raccomandazioni standard senza adattarle al paziente o consultare l'anamnesi.")
+        alert.append(
+            "🚜 **Effetto Bulldozer (Linee Guida a testa bassa):** applica raccomandazioni standard senza adattarle al paziente o consultare l'anamnesi."
+        )
     if esami_ridondanti >= 2 or (conteggi["blu"] >= 2 and spesa >= 7000):
-        alert.append("🔬 **Iper-prescrizione / Medicina Difensiva:** tende ad accumulare esami o procedure intermedie prima di decidere.")
+        alert.append(
+            "🔬 **Iper-prescrizione / Medicina Difensiva:** tende ad accumulare esami o procedure intermedie prima di decidere."
+        )
     if conteggi["rosso"] >= 2:
         alert.append("🚨 **Errori Clinici Critici Ricorrenti:** scelte ad alto rischio di tossicità o sottotrattamento.")
     if cons_anamnesi == 0 and tot >= 3:
@@ -83,22 +89,25 @@ def analizza_profilo_comportamentale(stato_run):
 def _genera_csv_esportazione(runs_per_entita, gruppi_attivi):
     output = io.StringIO()
     writer = csv.writer(output, delimiter=";")
-    writer.writerow([
-        "Postazione_o_Gruppo",
-        "Modalita",
-        "Scenario",
-        "Nodo_Finale",
-        "Vitalita_%",
-        "Controllo_Onc_%",
-        "QoL_%",
-        "Spesa_SSN_EUR",
-        "Consultazioni_Anamnesi",
-        "Scelte_Verdi_Tailored",
-        "Scelte_Blu_Subottimali",
-        "Scelte_Gialle_Bulldozer",
-        "Scelte_Rosse_Critiche",
-        "Diagnosi_Comportamentale",
-    ])
+    writer.writerow(
+        [
+            "Postazione_o_Gruppo",
+            "Modalita",
+            "Scenario",
+            "Nodo_Finale",
+            "Vitalita_%",
+            "Controllo_Onc_%",
+            "QoL_%",
+            "Spesa_SSN_EUR",
+            "Consultazioni_Anamnesi",
+            "Scelte_Verdi_Tailored",
+            "Scelte_Blu_Subottimali",
+            "Scelte_Gialle_Bulldozer",
+            "Scelte_Rosse_Critiche",
+            "Diagnosi_Comportamentale",
+        ]
+    )
+
     for entita, lista_runs in sorted(runs_per_entita.items()):
         modalita = "Gruppo/Coppia" if entita in gruppi_attivi else "Singolo"
         for case_id, v in lista_runs:
@@ -107,30 +116,34 @@ def _genera_csv_esportazione(runs_per_entita, gruppi_attivi):
             for s in v.get("percorso", []):
                 c = s.get("colore", "blu")
                 conteggi[c] = conteggi.get(c, 0) + 1
-            writer.writerow([
-                entita,
-                modalita,
-                case_id,
-                v.get("current_node", ""),
-                v.get("vitalita", 0),
-                v.get("oncologico", 0),
-                v.get("qol", 0),
-                v.get("spesa_ssn", 0),
-                v.get("consultazioni_anamnesi", 0),
-                conteggi["verde"],
-                conteggi["blu"],
-                conteggi["giallo"],
-                conteggi["rosso"],
-                " | ".join(alerts).replace("**", ""),
-            ])
+
+            writer.writerow(
+                [
+                    entita,
+                    modalita,
+                    case_id,
+                    v.get("current_node", ""),
+                    v.get("vitalita", 0),
+                    v.get("oncologico", 0),
+                    v.get("qol", 0),
+                    v.get("spesa_ssn", 0),
+                    v.get("consultazioni_anamnesi", 0),
+                    conteggi["verde"],
+                    conteggi["blu"],
+                    conteggi["giallo"],
+                    conteggi["rosso"],
+                    " | ".join(alerts).replace("**", ""),
+                ]
+            )
+
     return output.getvalue().encode("utf-8-sig")
 
 
 def _genera_report_html_plenario(runs_per_entita, gruppi_attivi):
     """Genera un report HTML completo e stampabile in PDF con grafici a barre."""
     data_ora = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
-
     tutti_singoli, tutti_gruppi = [], []
+
     for entita, lista_runs in runs_per_entita.items():
         if entita in gruppi_attivi:
             tutti_gruppi.extend(lista_runs)
@@ -142,7 +155,10 @@ def _genera_report_html_plenario(runs_per_entita, gruppi_attivi):
 
     def bar_html(val, color):
         w = max(2, min(100, val))
-        return f'<div style="background:#e2e8f0;border-radius:6px;height:14px;width:100%;overflow:hidden;"><div style="background:{color};height:100%;width:{w}%;"></div></div>'
+        return (
+            f'<div style="background:#e2e8f0;border-radius:6px;height:14px;width:100%;overflow:hidden;">'
+            f'<div style="background:{color};height:100%;width:{w}%;"></div></div>'
+        )
 
     righe_medici_html = []
     medici_set = {e for e in runs_per_entita if e not in gruppi_attivi}
@@ -170,14 +186,19 @@ def _genera_report_html_plenario(runs_per_entita, gruppi_attivi):
         else:
             esito_din = '<span style="color:#64748b;">— Dati parziali</span>'
 
-        righe_medici_html.append(f"""
-        <tr>
-            <td><strong>Medico {html.escape(m)}</strong><br><small style="color:#64748b;">Gruppo: {html.escape(', '.join(gruppi_m)) if gruppi_m else 'Nessuno'}</small></td>
-            <td>🟩 {st_s['pct']['verde']}% | 🟨+🟥 <strong>{err_s}%</strong><br><small>QoL: {st_s['avg_qol']}% | Spesa: {st_s['avg_spesa']:,} €</small></td>
-            <td>🟩 {st_g['pct']['verde']}% | 🟨+🟥 <strong>{err_g}%</strong><br><small>QoL: {st_g['avg_qol']}% | Spesa: {st_g['avg_spesa']:,} €</small></td>
-            <td>{esito_din}</td>
-        </tr>
-        """)
+        righe_medici_html.append(
+            f"""
+            <tr>
+                <td><strong>Medico {html.escape(m)}</strong><br>
+                <small style="color:#64748b;">Gruppo: {html.escape(', '.join(gruppi_m)) if gruppi_m else 'Nessuno'}</small></td>
+                <td>🟩 {st_s['pct']['verde']}% | 🟨+🟥 <strong>{err_s}%</strong><br>
+                <small>QoL: {st_s['avg_qol']}% | Spesa: {st_s['avg_spesa']:,} €</small></td>
+                <td>🟩 {st_g['pct']['verde']}% | 🟨+🟥 <strong>{err_g}%</strong><br>
+                <small>QoL: {st_g['avg_qol']}% | Spesa: {st_g['avg_spesa']:,} €</small></td>
+                <td>{esito_din}</td>
+            </tr>
+            """
+        )
 
     return f"""<!DOCTYPE html>
 <html lang="it">
@@ -185,60 +206,65 @@ def _genera_report_html_plenario(runs_per_entita, gruppi_attivi):
 <meta charset="UTF-8">
 <title>Report Debriefing 2getSIM — {data_ora}</title>
 <style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0f172a; margin: 32px; background: #ffffff; }}
-  .header {{ background: #0f172a; color: white; padding: 20px 24px; border-radius: 12px; margin-bottom: 24px; }}
-  .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 28px; }}
-  .card {{ border: 1px solid #cbd5e1; border-radius: 10px; padding: 18px; background: #f8fafc; }}
-  table {{ width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }}
-  th, td {{ border: 1px solid #cbd5e1; padding: 10px 12px; text-align: left; }}
-  th {{ background: #f1f5f9; }}
-  @media print {{ body {{ margin: 12px; }} }}
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0f172a; margin: 32px; background: #ffffff; }}
+.header {{ background: #0f172a; color: white; padding: 20px 24px; border-radius: 12px; margin-bottom: 24px; }}
+.grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 28px; }}
+.card {{ border: 1px solid #cbd5e1; border-radius: 10px; padding: 18px; background: #f8fafc; }}
+table {{ width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }}
+th, td {{ border: 1px solid #cbd5e1; padding: 10px 12px; text-align: left; }}
+th {{ background: #f1f5f9; }}
+@media print {{ body {{ margin: 12px; }} }}
 </style>
 </head>
 <body>
-  <div class="header">
+<div class="header">
     <h1 style="margin:0;color:white;">⚡ 2getSIM — Report Finale di Debriefing Clinico</h1>
     <p style="margin:6px 0 0 0;color:#94a3b8;">Confronto Decisionale: Lavoro Individuale vs Lavoro Congiunto (Coppia / Gruppo) • Generato il {data_ora}</p>
-  </div>
-
-  <h2>1. Impatto del Lavoro Congiunto (Media Complessiva Aula)</h2>
-  <div class="grid">
+</div>
+<h2>1. Impatto del Lavoro Congiunto (Media Complessiva Aula)</h2>
+<div class="grid">
     <div class="card">
-      <h3>👤 Decisioni Individuali ({agg_s['n_runs']} simulazioni)</h3>
-      <p>🟩 Scelte Tailored Ottimali: <strong>{agg_s['pct']['verde']}%</strong></p>{bar_html(agg_s['pct']['verde'], '#16a34a')}
-      <p>🟦 Scelte Subottimali: <strong>{agg_s['pct']['blu']}%</strong></p>{bar_html(agg_s['pct']['blu'], '#2563eb')}
-      <p>🟨 Effetto Bulldozer (Linee Guida non tailored): <strong>{agg_s['pct']['giallo']}%</strong></p>{bar_html(agg_s['pct']['giallo'], '#ca8a04')}
-      <p>🟥 Errori Critici: <strong>{agg_s['pct']['rosso']}%</strong></p>{bar_html(agg_s['pct']['rosso'], '#dc2626')}
-      <hr>
-      <p>🌿 QoL Media: <strong>{agg_s['avg_qol']}%</strong> &nbsp;|&nbsp; 🎯 Controllo Onc: <strong>{agg_s['avg_onc']}%</strong> &nbsp;|&nbsp; 💶 Spesa Media SSN: <strong>{agg_s['avg_spesa']:,} €</strong></p>
+        <h3>👤 Decisioni Individuali ({agg_s['n_runs']} simulazioni)</h3>
+        <p>🟩 Scelte Tailored Ottimali: <strong>{agg_s['pct']['verde']}%</strong></p>
+        {bar_html(agg_s['pct']['verde'], '#16a34a')}
+        <p>🟦 Scelte Subottimali: <strong>{agg_s['pct']['blu']}%</strong></p>
+        {bar_html(agg_s['pct']['blu'], '#2563eb')}
+        <p>🟨 Effetto Bulldozer (Linee Guida non tailored): <strong>{agg_s['pct']['giallo']}%</strong></p>
+        {bar_html(agg_s['pct']['giallo'], '#ca8a04')}
+        <p>🟥 Errori Critici: <strong>{agg_s['pct']['rosso']}%</strong></p>
+        {bar_html(agg_s['pct']['rosso'], '#dc2626')}
+        <hr>
+        <p>🌿 QoL Media: <strong>{agg_s['avg_qol']}%</strong> &nbsp;|&nbsp; 🎯 Controllo Onc: <strong>{agg_s['avg_onc']}%</strong> &nbsp;|&nbsp; 💶 Spesa Media SSN: <strong>{agg_s['avg_spesa']:,} €</strong></p>
     </div>
-
     <div class="card">
-      <h3>👥 Decisioni in Coppia / Gruppo ({agg_g['n_runs']} simulazioni)</h3>
-      <p>🟩 Scelte Tailored Ottimali: <strong>{agg_g['pct']['verde']}%</strong></p>{bar_html(agg_g['pct']['verde'], '#16a34a')}
-      <p>🟦 Scelte Subottimali: <strong>{agg_g['pct']['blu']}%</strong></p>{bar_html(agg_g['pct']['blu'], '#2563eb')}
-      <p>🟨 Effetto Bulldozer (Linee Guida non tailored): <strong>{agg_g['pct']['giallo']}%</strong></p>{bar_html(agg_g['pct']['giallo'], '#ca8a04')}
-      <p>🟥 Errori Critici: <strong>{agg_g['pct']['rosso']}%</strong></p>{bar_html(agg_g['pct']['rosso'], '#dc2626')}
-      <hr>
-      <p>🌿 QoL Media: <strong>{agg_g['avg_qol']}%</strong> &nbsp;|&nbsp; 🎯 Controllo Onc: <strong>{agg_g['avg_onc']}%</strong> &nbsp;|&nbsp; 💶 Spesa Media SSN: <strong>{agg_g['avg_spesa']:,} €</strong></p>
+        <h3>👥 Decisioni in Coppia / Gruppo ({agg_g['n_runs']} simulazioni)</h3>
+        <p>🟩 Scelte Tailored Ottimali: <strong>{agg_g['pct']['verde']}%</strong></p>
+        {bar_html(agg_g['pct']['verde'], '#16a34a')}
+        <p>🟦 Scelte Subottimali: <strong>{agg_g['pct']['blu']}%</strong></p>
+        {bar_html(agg_g['pct']['blu'], '#2563eb')}
+        <p>🟨 Effetto Bulldozer (Linee Guida non tailored): <strong>{agg_g['pct']['giallo']}%</strong></p>
+        {bar_html(agg_g['pct']['giallo'], '#ca8a04')}
+        <p>🟥 Errori Critici: <strong>{agg_g['pct']['rosso']}%</strong></p>
+        {bar_html(agg_g['pct']['rosso'], '#dc2626')}
+        <hr>
+        <p>🌿 QoL Media: <strong>{agg_g['avg_qol']}%</strong> &nbsp;|&nbsp; 🎯 Controllo Onc: <strong>{agg_g['avg_onc']}%</strong> &nbsp;|&nbsp; 💶 Spesa Media SSN: <strong>{agg_g['avg_spesa']:,} €</strong></p>
     </div>
-  </div>
-
-  <h2>2. Confronto Individuale vs Coppia per Singolo Partecipante</h2>
-  <table>
+</div>
+<h2>2. Confronto Individuale vs Coppia per Singolo Partecipante</h2>
+<table>
     <thead>
-      <tr>
-        <th>Partecipante</th>
-        <th>Performance da Solo</th>
-        <th>Performance in Coppia / Gruppo</th>
-        <th>Dinamica Relazionale Rilevata</th>
-      </tr>
+        <tr>
+            <th>Partecipante</th>
+            <th>Performance da Solo</th>
+            <th>Performance in Coppia / Gruppo</th>
+            <th>Dinamica Relazionale Rilevata</th>
+        </tr>
     </thead>
     <tbody>
-      {''.join(righe_medici_html)}
+        {''.join(righe_medici_html)}
     </tbody>
-  </table>
-  <p style="margin-top:20px;color:#64748b;font-size:12px;">Suggerimento: premi Ctrl+P (o Cmd+P su Mac) per salvare questa schermata in formato PDF.</p>
+</table>
+<p style="margin-top:20px;color:#64748b;font-size:12px;">Suggerimento: premi Ctrl+P (o Cmd+P su Mac) per salvare questa schermata in formato PDF.</p>
 </body>
 </html>"""
 
@@ -264,7 +290,9 @@ def _render_confronto_plenario_aula(runs_per_entita, gruppi_attivi):
     c1.metric(
         "Scelte Tailored (🟩) in Gruppo",
         f"{agg_g['pct']['verde']}%",
-        f"{round(agg_g['pct']['verde'] - agg_s['pct']['verde'], 1):+.1f}% vs Singolo" if agg_g["tot_scelte"] > 0 else "In attesa gruppi",
+        f"{round(agg_g['pct']['verde'] - agg_s['pct']['verde'], 1):+.1f}% vs Singolo"
+        if agg_g["tot_scelte"] > 0
+        else "In attesa gruppi",
     )
     c2.metric(
         "Errori Bulldozer/Critici (🟨+🟥)",
@@ -280,7 +308,9 @@ def _render_confronto_plenario_aula(runs_per_entita, gruppi_attivi):
     c4.metric(
         "Spesa Media SSN per Paziente",
         f"{agg_g['avg_spesa']:,} €".replace(",", "."),
-        f"{agg_g['avg_spesa'] - agg_s['avg_spesa']:+,} € vs Singolo".replace(",", ".") if agg_g["n_runs"] > 0 else "In attesa gruppi",
+        f"{agg_g['avg_spesa'] - agg_s['avg_spesa']:+,} € vs Singolo".replace(",", ".")
+        if agg_g["n_runs"] > 0
+        else "In attesa gruppi",
         delta_color="inverse",
     )
 
@@ -289,20 +319,42 @@ def _render_confronto_plenario_aula(runs_per_entita, gruppi_attivi):
         st.markdown("#### Distribuzione Scelte Aula: Singolo vs Coppia")
         st.bar_chart(
             {
-                "🟩 Tailored Ottimale": {"Da Solo (Media Aula)": agg_s["pct"]["verde"], "In Coppia/Gruppo": agg_g["pct"]["verde"]},
-                "🟦 Subottimale": {"Da Solo (Media Aula)": agg_s["pct"]["blu"], "In Coppia/Gruppo": agg_g["pct"]["blu"]},
-                "🟨 Bulldozer Linee Guida": {"Da Solo (Media Aula)": agg_s["pct"]["giallo"], "In Coppia/Gruppo": agg_g["pct"]["giallo"]},
-                "🟥 Errore Critico": {"Da Solo (Media Aula)": agg_s["pct"]["rosso"], "In Coppia/Gruppo": agg_g["pct"]["rosso"]},
+                "🟩 Tailored Ottimale": {
+                    "Da Solo (Media Aula)": agg_s["pct"]["verde"],
+                    "In Coppia/Gruppo": agg_g["pct"]["verde"],
+                },
+                "🟦 Subottimale": {
+                    "Da Solo (Media Aula)": agg_s["pct"]["blu"],
+                    "In Coppia/Gruppo": agg_g["pct"]["blu"],
+                },
+                "🟨 Bulldozer Linee Guida": {
+                    "Da Solo (Media Aula)": agg_s["pct"]["giallo"],
+                    "In Coppia/Gruppo": agg_g["pct"]["giallo"],
+                },
+                "🟥 Errore Critico": {
+                    "Da Solo (Media Aula)": agg_s["pct"]["rosso"],
+                    "In Coppia/Gruppo": agg_g["pct"]["rosso"],
+                },
             },
             use_container_width=True,
         )
+
     with col_p2:
         st.markdown("#### Outcome Clinici Medi: Singolo vs Coppia")
         st.bar_chart(
             {
-                "❤️ Vitalità": {"Da Solo (Media Aula)": agg_s["avg_vit"], "In Coppia/Gruppo": agg_g["avg_vit"]},
-                "🎯 Controllo Onc.": {"Da Solo (Media Aula)": agg_s["avg_onc"], "In Coppia/Gruppo": agg_g["avg_onc"]},
-                "🌿 Qualità di Vita": {"Da Solo (Media Aula)": agg_s["avg_qol"], "In Coppia/Gruppo": agg_g["avg_qol"]},
+                "❤️ Vitalità": {
+                    "Da Solo (Media Aula)": agg_s["avg_vit"],
+                    "In Coppia/Gruppo": agg_g["avg_vit"],
+                },
+                "🎯 Controllo Onc.": {
+                    "Da Solo (Media Aula)": agg_s["avg_onc"],
+                    "In Coppia/Gruppo": agg_g["avg_onc"],
+                },
+                "🌿 Qualità di Vita": {
+                    "Da Solo (Media Aula)": agg_s["avg_qol"],
+                    "In Coppia/Gruppo": agg_g["avg_qol"],
+                },
             },
             use_container_width=True,
         )
@@ -310,12 +362,11 @@ def _render_confronto_plenario_aula(runs_per_entita, gruppi_attivi):
 
 def _render_scheda_grafica_medico(runs_per_entita, gruppi_attivi):
     st.markdown("### 📈 Analisi Grafica per Singolo Medico (Da Solo vs Coppia / Gruppo)")
-
     medici_set = {e for e in runs_per_entita if e not in gruppi_attivi}
     for membri in gruppi_attivi.values():
         medici_set.update(membri)
-
     medici_ordinati = sorted(medici_set)
+
     if not medici_ordinati:
         st.info("Nessun dato individuale o di gruppo disponibile per generare i grafici.")
         return
@@ -344,6 +395,7 @@ def _render_scheda_grafica_medico(runs_per_entita, gruppi_attivi):
     err_sing = stats_singolo["pct"]["giallo"] + stats_singolo["pct"]["rosso"]
     err_grup = stats_gruppo["pct"]["giallo"] + stats_gruppo["pct"]["rosso"]
     delta_err = round(err_grup - err_sing, 1) if stats_gruppo["tot_scelte"] > 0 and stats_singolo["tot_scelte"] > 0 else 0
+
     k3.metric(
         "Errori Critici (🟨+🟥) Solo",
         f"{err_sing}%",
@@ -358,7 +410,6 @@ def _render_scheda_grafica_medico(runs_per_entita, gruppi_attivi):
     )
 
     g_col1, g_col2 = st.columns(2, gap="large")
-
     with g_col1:
         st.markdown("#### 1. Profilo Decisionale (% Scelte per Colore)")
         dati_colori = {
@@ -407,6 +458,7 @@ def _render_scheda_grafica_medico(runs_per_entita, gruppi_attivi):
             g_runs = runs_per_entita.get(g_nome, [])
             if not g_runs:
                 continue
+
             g_stats = aggrega_metriche_runs(g_runs)
             g_err = round(g_stats["pct"]["giallo"] + g_stats["pct"]["rosso"], 1)
 
@@ -424,41 +476,59 @@ def _render_scheda_grafica_medico(runs_per_entita, gruppi_attivi):
 
             dot_dinamica = [
                 "digraph D {",
-                '  rankdir="LR";',
-                '  bgcolor="transparent";',
-                '  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=11, margin="0.18,0.12"];',
-                f'  "M" [label="Medico {medico_sel} (Da Solo)\\nErrori 🟨+🟥: {err_sing}% | Tailored 🟩: {stats_singolo["pct"]["verde"]}%\\nAnamnesi aperta: {stats_singolo["avg_anamnesi"]}x", fillcolor="#e0e7ff", color="#4338ca", penwidth=2];',
-                f'  "G" [label="{g_nome} (Insieme)\\nErrori 🟨+🟥: {g_err}% | Tailored 🟩: {g_stats["pct"]["verde"]}%\\nAnamnesi aperta: {g_stats["avg_anamnesi"]}x", fillcolor="#f8fafc", color="{col_arco}", penwidth=2.5];',
-                f'  "M" -> "G" [label=" {etich_dinamica} ", color="{col_arco}", fontcolor="{col_arco}", penwidth=2.2];',
+                ' rankdir="LR";',
+                ' bgcolor="transparent";',
+                ' node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=11, margin="0.18,0.12"];',
+                f' "M" [label="Medico {medico_sel} (Da Solo)\\nErrori 🟨+🟥: {err_sing}% | Tailored 🟩: {stats_singolo["pct"]["verde"]}%\\nAnamnesi aperta: {stats_singolo["avg_anamnesi"]}x", fillcolor="#e0e7ff", color="#4338ca", penwidth=2];',
+                f' "G" [label="{g_nome} (Insieme)\\nErrori 🟨+🟥: {g_err}% | Tailored 🟩: {g_stats["pct"]["verde"]}%\\nAnamnesi aperta: {g_stats["avg_anamnesi"]}x", fillcolor="#f8fafc", color="{col_arco}", penwidth=2.5];',
+                f' "M" -> "G" [label=" {etich_dinamica} ", color="{col_arco}", fontcolor="{col_arco}", penwidth=2.2];',
             ]
             for p in partner:
                 p_stats = aggrega_metriche_runs(runs_per_entita.get(p, []))
                 p_err = round(p_stats["pct"]["giallo"] + p_stats["pct"]["rosso"], 1)
                 dot_dinamica.append(
-                    f'  "P_{p}" [label="Partner {p} (Da Solo)\\nErrori 🟨+🟥: {p_err}% | Tailored 🟩: {p_stats["pct"]["verde"]}%\\nAnamnesi aperta: {p_stats["avg_anamnesi"]}x", fillcolor="#f1f5f9", color="#64748b", penwidth=1.5];'
+                    f' "P_{p}" [label="Partner {p} (Da Solo)\\nErrori 🟨+🟥: {p_err}% | Tailored 🟩: {p_stats["pct"]["verde"]}%\\nAnamnesi aperta: {p_stats["avg_anamnesi"]}x", fillcolor="#f1f5f9", color="#64748b", penwidth=1.5];'
                 )
-                dot_dinamica.append(f'  "P_{p}" -> "G" [style=dashed, color="#64748b"];')
+                dot_dinamica.append(f' "P_{p}" -> "G" [style=dashed, color="#64748b"];')
             dot_dinamica.append("}")
             st.graphviz_chart("\n".join(dot_dinamica), use_container_width=True)
 
 
-def render_osservatorio_master(room):
+def render_osservatorio_master(room, role="master"):
     """Punto di ingresso unico chiamato da app.py per mostrare l'Osservatorio Errori, Grafici & Export."""
     st.markdown("## 🧠 Osservatorio Regia Master — Debriefing, Proiezione & Export")
-
     tutti_stati = room.get("stati_casi", {})
     if not tutti_stati:
         st.info("Nessuna simulazione avviata finora dai discenti o dai gruppi.")
         return
 
+    # Allinea i bucket generati da security.py (singolo_XXX / gruppo_YYY) con i nomi puliti
+    gruppi_raw = room.get("gruppi_personalizzati", {})
+    gruppi_attivi = {}
+    slug_to_gruppo = {}
+    for nome_g, membri in gruppi_raw.items():
+        slug = "gruppo_" + "".join(c if c.isalnum() else "_" for c in nome_g.lower())
+        gruppi_attivi[nome_g] = list(membri)
+        slug_to_gruppo[slug] = nome_g
+
     runs_per_entita = {}
     for chiave, v in tutti_stati.items():
         if "__" not in chiave:
             continue
-        case_id, entita = chiave.split("__", 1)
-        runs_per_entita.setdefault(entita, []).append((case_id, v))
+        case_id, bucket = chiave.split("__", 1)
+        if bucket.startswith("master_"):
+            continue
+        if bucket in slug_to_gruppo:
+            entita_pulita = slug_to_gruppo[bucket]
+        elif bucket.startswith("singolo_"):
+            entita_pulita = bucket[len("singolo_"):]
+        else:
+            entita_pulita = bucket
+        runs_per_entita.setdefault(entita_pulita, []).append((case_id, v))
 
-    gruppi_attivi = room.get("gruppi", {})
+    if not runs_per_entita:
+        st.info("Nessuna simulazione discente attiva da analizzare (le prove della Control Room sono escluse).")
+        return
 
     exp1, exp2 = st.columns(2)
     with exp1:
@@ -482,7 +552,6 @@ def render_osservatorio_master(room):
         )
 
     st.divider()
-
     tab_plenario, tab_grafici, tab_dettaglio, tab_coppie = st.tabs(
         [
             "📽️ Proiezione Plenaria (Media Aula)",
@@ -518,6 +587,8 @@ def render_osservatorio_master(room):
                             for err in errori:
                                 badge_col = {"blu": "🟦", "giallo": "🟨", "rosso": "🟥"}.get(err.get("colore"), "⬜")
                                 st.markdown(f"{badge_col} **{err['nodo']}**: _{err['scelta']}_")
+                                if err.get("razionale"):
+                                    st.caption(f"💡 {err['razionale']}")
 
     with tab_coppie:
         st.markdown("### Sintesi Dinamiche di Gruppo (Dominante vs Sinergia)")
@@ -544,6 +615,7 @@ def render_osservatorio_master(room):
                     if not runs_m:
                         st.caption(f"• **{m}**: nessuna prova individuale registrata.")
                         continue
+
                     err_m = sum(
                         1
                         for _, r in runs_m
@@ -554,10 +626,18 @@ def render_osservatorio_master(room):
                     rate_m = err_m / tot_m
 
                     if rate_gruppo < rate_m - 0.15:
-                        st.success(f"✅ **{m}** migliora in gruppo (errori critici: da {int(rate_m*100)}% singolo a {int(rate_gruppo*100)}% in gruppo) → **Aperto al confronto**.")
+                        st.success(
+                            f"✅ **{m}** migliora in gruppo (errori critici: da {int(rate_m*100)}% singolo a {int(rate_gruppo*100)}% in gruppo) → **Aperto al confronto**."
+                        )
                     elif rate_gruppo > rate_m + 0.15:
-                        st.error(f"⚠️ **{m}** peggiora in gruppo (errori critici: da {int(rate_m*100)}% singolo a {int(rate_gruppo*100)}% in gruppo) → **Possibile trascinamento / figura dominante del partner**.")
+                        st.error(
+                            f"⚠️ **{m}** peggiora in gruppo (errori critici: da {int(rate_m*100)}% singolo a {int(rate_gruppo*100)}% in gruppo) → **Possibile trascinamento / figura dominante del partner**."
+                        )
                     elif rate_m >= 0.30 and abs(rate_gruppo - rate_m) <= 0.15:
-                        st.warning(f"👑 **{m}** mantiene gli stessi errori anche in coppia ({int(rate_gruppo*100)}%) → **Possibile figura dominante che impone il proprio schema**.")
+                        st.warning(
+                            f"👑 **{m}** mantiene gli stessi errori anche in coppia ({int(rate_gruppo*100)}%) → **Possibile figura dominante che impone il proprio schema**."
+                        )
                     else:
-                        st.info(f"🤝 **{m}** mantiene un profilo lineare e solido sia da solo ({int(rate_m*100)}%) che in gruppo ({int(rate_gruppo*100)}%).")
+                        st.info(
+                            f"🤝 **{m}** mantiene un profilo lineare e solido sia da solo ({int(rate_m*100)}%) che in gruppo ({int(rate_gruppo*100)}%)."
+                        )
