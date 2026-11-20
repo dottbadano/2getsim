@@ -32,10 +32,7 @@ st.markdown(
         [data-testid="stToolbar"] {display: none !important;}
         [data-testid="stDecoration"] {display: none !important;}
         [data-testid="stStatusWidget"] {display: none !important;}
-        .block-container {
-            padding-top: 1.2rem !important;
-            padding-bottom: 1.5rem !important;
-        }
+        .block-container {padding-top: 1.2rem !important; padding-bottom: 1.5rem !important;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -75,15 +72,7 @@ def _deduci_colore_opzione(opt):
 
 def _is_terminato(stato_run, caso_dict):
     nid = stato_run.get("current_node", "")
-    if nid in caso_dict.get("esiti", {}):
-        return True
-    if stato_run.get("vitalita", 100) <= 0:
-        return True
-    if stato_run.get("oncologico", 100) <= 0:
-        return True
-    if stato_run.get("qol", 75) < 30:
-        return True
-    return False
+    return nid in caso_dict.get("esiti", {}) or stato_run.get("vitalita", 100) <= 0 or stato_run.get("oncologico", 100) <= 0 or stato_run.get("qol", 75) < 30
 
 
 def _applica_scelta_in_coda(stato_run, scenario_id="", postazione_id="", room_ref=None):
@@ -95,16 +84,14 @@ def _applica_scelta_in_coda(stato_run, scenario_id="", postazione_id="", room_re
     stato_run["vitalita"] = max(0, min(100, stato_run["vitalita"] + opt.get("d_vit", 0)))
     stato_run["oncologico"] = max(0, min(100, stato_run["oncologico"] + opt.get("d_onc", 0)))
     stato_run["qol"] = max(0, min(100, stato_run["qol"] + opt.get("d_qol", 0)))
-    stato_run["percorso"].append(
-        {
-            "nodo_id": pending["nodo_id"],
-            "nodo": pending["nodo_titolo"],
-            "scelta": opt["testo"],
-            "colore": col_scelta,
-            "razionale": opt.get("razionale", ""),
-            "anamnesi_aperta": pending["anamnesi_aperta"],
-        }
-    )
+    stato_run["percorso"].append({
+        "nodo_id": pending["nodo_id"],
+        "nodo": pending["nodo_titolo"],
+        "scelta": opt["testo"],
+        "colore": col_scelta,
+        "razionale": opt.get("razionale", ""),
+        "anamnesi_aperta": pending["anamnesi_aperta"],
+    })
     stato_run["current_node"] = opt["next"]
     entita_low = postazione_id.lower()
     is_docente = entita_low in ("gbadano", "acavo", "smigone") or entita_low.startswith("master")
@@ -115,7 +102,7 @@ def _applica_scelta_in_coda(stato_run, scenario_id="", postazione_id="", room_re
                 edizione=str(r_ref.get("edizione", f"Corso_{datetime.now().strftime('%Y_%m')}")),
                 scenario=scenario_id,
                 postazione=postazione_id,
-                modalita=str(r_ref.get("modalita", "Aula")),
+                modalita=str(r_ref.get("modalita_attiva", "Aula")),
                 membri=str(stato_run.get("etichetta", postazione_id)),
                 passo=len(stato_run["percorso"]),
                 snodo_id=str(pending["nodo_id"]),
@@ -145,48 +132,40 @@ def _sincronizza_barriera_aula(room, selected_id, caso_dict, forzata=False):
     if not attivi:
         return 0, 0, False
     min_step = min(len(v.get("percorso", [])) for _, v in attivi)
-    in_gioco_questo_passo = [(ent, v) for ent, v in attivi if len(v.get("percorso", [])) == min_step]
-    pronti = [(ent, v) for ent, v in in_gioco_questo_passo if "scelta_pendente" in v]
-    tot_attesi = len(in_gioco_questo_passo)
-    tot_pronti = len(pronti)
-    if tot_attesi > 0 and (tot_pronti >= tot_attesi or (forzata and tot_pronti > 0)):
+    in_gioco = [(ent, v) for ent, v in attivi if len(v.get("percorso", [])) == min_step]
+    pronti = [(ent, v) for ent, v in in_gioco if "scelta_pendente" in v]
+    if len(in_gioco) > 0 and (len(pronti) >= len(in_gioco) or (forzata and len(pronti) > 0)):
         for ent, v in pronti:
             _applica_scelta_in_coda(v, scenario_id=selected_id, postazione_id=ent, room_ref=room)
-        return tot_pronti, tot_attesi, True
-    return tot_pronti, tot_attesi, False
+        return len(pronti), len(in_gioco), True
+    return len(pronti), len(in_gioco), False
 
 
 def _colore_barra(valore):
-    if valore >= 65:
-        return "#16a34a"
-    if valore >= 35:
-        return "#d97706"
-    return "#dc2626"
+    return "#16a34a" if valore >= 65 else ("#d97706" if valore >= 35 else "#dc2626")
 
 
-def _render_quadro_conclusivo_sobrio(state, stato_clinico_label, nota_clinica, chiave, anamnesi_open_key, room):
-    vit = max(0, min(100, state.get("vitalita", 0)))
-    onc = max(0, min(100, state.get("oncologico", 0)))
-    qol = max(0, min(100, state.get("qol", 0)))
+def _barra_html(etichetta_bar, valore):
+    col = _colore_barra(valore)
+    return (
+        f'<div style="margin-bottom:0.9rem;">'
+        f'<div style="display:flex;justify-content:space-between;font-weight:700;color:#0f172a;margin-bottom:4px;"><span>{etichetta_bar}</span><span>{valore}%</span></div>'
+        f'<div style="background:#e2e8f0;border-radius:8px;height:16px;width:100%;overflow:hidden;"><div style="background:{col};height:100%;width:{valore}%;"></div></div>'
+        f'</div>'
+    )
+
+
+def _render_quadro_conclusivo_sobrio(state, label, nota, chiave, anamnesi_open_key, room):
+    vit, onc, qol = [max(0, min(100, state.get(k, 0))) for k in ("vitalita", "oncologico", "qol")]
+    barre = _barra_html("❤️ Vitalità", vit) + _barra_html("🎯 Controllo Oncologico", onc) + _barra_html("🌿 Qualità di Vita (QoL)", qol)
     st.markdown(
         f"""
-        <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.2rem;">
-            <div style="font-size: 0.8rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #475569;">Quadro Clinico Conclusivo</div>
-            <h3 style="margin: 0.25rem 0 0.5rem 0; color: #0f172a; font-size: 1.35rem;">{stato_clinico_label}</h3>
-            <p style="margin: 0 0 1.25rem 0; color: #334155; font-size: 0.96rem; line-height: 1.5;">{nota_clinica}</p>
-            <div style="margin-bottom: 1rem;">
-                <div style="display: flex; justify-content: space-between; font-weight: 700; color: #0f172a; margin-bottom: 4px;"><span>❤️ Vitalità</span><span>{vit}%</span></div>
-                <div style="background: #e2e8f0; border-radius: 8px; height: 18px; width: 100%; overflow: hidden;"><div style="background: {_colore_barra(vit)}; height: 100%; width: {vit}%; transition: width 0.4s;"></div></div>
-            </div>
-            <div style="margin-bottom: 1rem;">
-                <div style="display: flex; justify-content: space-between; font-weight: 700; color: #0f172a; margin-bottom: 4px;"><span>🎯 Controllo Oncologico</span><span>{onc}%</span></div>
-                <div style="background: #e2e8f0; border-radius: 8px; height: 18px; width: 100%; overflow: hidden;"><div style="background: {_colore_barra(onc)}; height: 100%; width: {onc}%; transition: width 0.4s;"></div></div>
-            </div>
-            <div style="margin-bottom: 1.1rem;">
-                <div style="display: flex; justify-content: space-between; font-weight: 700; color: #0f172a; margin-bottom: 4px;"><span>🌿 Qualità di Vita (QoL)</span><span>{qol}%</span></div>
-                <div style="background: #e2e8f0; border-radius: 8px; height: 18px; width: 100%; overflow: hidden;"><div style="background: {_colore_barra(qol)}; height: 100%; width: {qol}%; transition: width 0.4s;"></div></div>
-            </div>
-            <div style="border-top: 1px solid #cbd5e1; padding-top: 0.85rem; color: #1e293b; font-size: 0.95rem;"><span>📋 <strong>Consultazioni anamnesi:</strong> {state.get('consultazioni_anamnesi', 0)}</span></div>
+        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:12px; padding:1.5rem; margin-bottom:1.2rem;">
+            <div style="font-size:0.8rem; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#475569;">Quadro Clinico Conclusivo</div>
+            <h3 style="margin:0.25rem 0 0.5rem 0; color:#0f172a; font-size:1.35rem;">{label}</h3>
+            <p style="margin:0 0 1.2rem 0; color:#334155; font-size:0.96rem; line-height:1.5;">{nota}</p>
+            {barre}
+            <div style="border-top:1px solid #cbd5e1; padding-top:0.8rem; color:#1e293b; font-size:0.95rem;">📋 <strong>Consultazioni anamnesi:</strong> {state.get('consultazioni_anamnesi', 0)}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -199,41 +178,58 @@ def _render_quadro_conclusivo_sobrio(state, stato_clinico_label, nota_clinica, c
             if step.get("razionale"):
                 st.caption(f"💡 {step['razionale']}")
     if st.button("🔄 Ripeti Simulazione", use_container_width=True):
-        del room["stati_casi"][chiave]
+        room["stati_casi"].pop(chiave, None)
         st.session_state[anamnesi_open_key] = False
         st.rerun()
 
 
-with st.sidebar:
-    st.markdown(f"### 👤 **{etichetta}**")
-    c1, c2 = st.columns(2)
-    if c1.button("🔄 Aggiorna", use_container_width=True):
+# --- BARRA SUPERIORE DI CONTROLLO (SEMPRE VISIBILE ANCHE SU GOOGLE SITES) ---
+if role == "master":
+    if "master_mode" not in st.session_state:
+        st.session_state["master_mode"] = "simulazione"
+
+    b1, b2, b3, b4 = st.columns([1.4, 1.4, 1.4, 0.8])
+    if b1.button("🎮 Vai a Simulazione", type="primary" if st.session_state["master_mode"] == "simulazione" else "secondary", use_container_width=True):
+        st.session_state["master_mode"] = "simulazione"
         st.rerun()
-    if c2.button("Esci", use_container_width=True):
+    if b2.button("✍️ Crea Caso Clinico", type="primary" if st.session_state["master_mode"] == "crea_caso" else "secondary", use_container_width=True):
+        st.session_state["master_mode"] = "crea_caso"
+        st.rerun()
+    if b3.button("🧠 Osservatorio & Debriefing", type="primary" if st.session_state["master_mode"] == "osservatorio" else "secondary", use_container_width=True):
+        st.session_state["master_mode"] = "osservatorio"
+        st.rerun()
+    if b4.button("🚪 Esci", use_container_width=True):
         st.session_state.authenticated = False
         st.rerun()
-    st.divider()
-    vista_master = "🎮 Simulazione Aula"
-    if role == "master":
-        vista_master = st.radio("Vista Docente:", ["🎮 Simulazione Aula", "🧠 Osservatorio Errori & Gruppi", "✍️ Crea Caso Clinico"])
-        st.divider()
-    if cases:
-        idx = cases.index(room["caso_attivo_globale"]) if room["caso_attivo_globale"] in cases else 0
-        selected_id = st.selectbox("Seleziona Scenario", cases, index=idx, format_func=get_case_label)
-    else:
-        selected_id = None
-    if role == "master" and selected_id:
-        render_regia_master(room, selected_id)
 
-if role == "master" and vista_master == "✍️ Crea Caso Clinico":
-    render_case_builder(CASE_DIR)
+    st.divider()
+
+    if st.session_state["master_mode"] == "crea_caso":
+        render_case_builder(CASE_DIR)
+        st.stop()
+    if st.session_state["master_mode"] == "osservatorio":
+        render_osservatorio_master(room, role)
+        st.stop()
+else:
+    top_u1, top_u2, top_u3 = st.columns([3, 1, 1])
+    top_u1.markdown(f"👤 **{etichetta}**")
+    if top_u2.button("🔄 Aggiorna", use_container_width=True):
+        st.rerun()
+    if top_u3.button("🚪 Esci", use_container_width=True):
+        st.session_state.authenticated = False
+        st.rerun()
+
+if not cases:
+    st.error("Nessuno scenario trovato in 'storycase/'. Clicca su '✍️ Crea Caso Clinico' in alto.")
     st.stop()
-if role == "master" and vista_master == "🧠 Osservatorio Errori & Gruppi":
-    render_osservatorio_master(room, role)
-    st.stop()
-if not selected_id:
-    st.error("Inserisci almeno un file nella cartella 'storycase/' (es. 001.py) oppure crealo da 'Crea Caso Clinico'.")
-    st.stop()
+
+if role == "master":
+    idx = cases.index(room["caso_attivo_globale"]) if room["caso_attivo_globale"] in cases else 0
+    selected_id = st.selectbox("📂 Scenario selezionato:", cases, index=idx, format_func=get_case_label)
+    with st.expander("🎛️ Regia Aula: Squadre, Gioco Singolo & Accessi", expanded=True):
+        render_regia_master(room, selected_id)
+else:
+    selected_id = room["caso_attivo_globale"] if room["caso_attivo_globale"] in cases else cases[0]
 
 mod = importlib.import_module(f"{CASE_DIR}.{selected_id}")
 importlib.reload(mod)
@@ -254,16 +250,17 @@ state = room["stati_casi"][chiave]
 n_pronti, n_attesi, sbloccato = _sincronizza_barriera_aula(room, selected_id, caso, forzata=False)
 if sbloccato:
     st.rerun()
+
 anamnesi_open_key = f"show_anamnesi_{chiave}"
 if anamnesi_open_key not in st.session_state:
     st.session_state[anamnesi_open_key] = False
 
 st.markdown(
     f"""
-    <div style="background: linear-gradient(135deg, #1e293b, #0f172a); padding: 1.4rem; border-radius: 12px; color: white; margin-bottom: 1.5rem;">
-        <span style="background: #334155; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem;">Postazione: {etichetta}</span>
-        <h2 style="margin: 0.5rem 0 0.2rem 0; font-size: 1.45rem;">{caso['titolo']}</h2>
-        <p style="margin: 0; color: #94a3b8; font-size: 0.95rem;">{caso.get('sottotitolo', '')}</p>
+    <div style="background:linear-gradient(135deg,#1e293b,#0f172a); padding:1.3rem; border-radius:12px; color:white; margin-bottom:1.2rem;">
+        <span style="background:#334155; padding:4px 10px; border-radius:6px; font-size:0.8rem;">Postazione: {etichetta}</span>
+        <h2 style="margin:0.4rem 0 0.2rem 0; font-size:1.4rem;">{caso['titolo']}</h2>
+        <p style="margin:0; color:#94a3b8; font-size:0.95rem;">{caso.get('sottotitolo', '')}</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -272,9 +269,7 @@ st.markdown(
 col_l, col_r = st.columns([1.15, 1.75], gap="large")
 with col_l:
     st.markdown("### 📊 Parametri Paziente")
-    vit_c = max(0, min(100, state["vitalita"]))
-    onc_c = max(0, min(100, state["oncologico"]))
-    qol_c = max(0, min(100, state["qol"]))
+    vit_c, onc_c, qol_c = [max(0, min(100, state[k])) for k in ("vitalita", "oncologico", "qol")]
     m1, m2, m3 = st.columns(3)
     m1.metric("❤️ Vitalità", f"{vit_c}%")
     m2.metric("🎯 Controllo Onc.", f"{onc_c}%")
@@ -297,8 +292,8 @@ with col_l:
                 st.rerun()
             st.info(caso["scheda_paziente"])
     if role == "master":
-        with st.expander("📡 Monitor Live & Sincronizzazione Aula", expanded=True):
-            st.markdown(f"**Stato votazione snodo corrente:** `{n_pronti} / {n_attesi}` pronti")
+        with st.expander("📡 Monitor Live, Salto Nodo & Google Sheet", expanded=False):
+            st.markdown(f"**Stato votazione snodo:** `{n_pronti} / {n_attesi}` pronti")
             if n_attesi > 0:
                 st.progress(min(1.0, n_pronti / n_attesi))
             if st.button("⏭️ Forza Avanzamento Ora (ignora assenti)", use_container_width=True):
@@ -309,26 +304,16 @@ with col_l:
                 if st.button("🧪 Testa scrittura su Google Sheet", use_container_width=True):
                     try:
                         registra_scelta(
-                            edizione="TEST_CONNESSIONE",
-                            scenario=selected_id,
-                            postazione="REGIA_MASTER",
-                            modalita="Test",
-                            membri=etichetta,
-                            passo=0,
-                            snodo_id="TEST",
-                            scelta="Verifica connessione Google Sheet OK",
-                            colore="verde",
-                            anamnesi="No",
-                            vitalita=100,
-                            controllo_onc=100,
-                            qol=75,
-                            spesa_ssn=0,
+                            edizione="TEST_CONNESSIONE", scenario=selected_id, postazione="REGIA_MASTER",
+                            modalita="Test", membri=etichetta, passo=0, snodo_id="TEST",
+                            scelta="Verifica connessione Google Sheet OK", colore="verde", anamnesi="No",
+                            vitalita=100, controllo_onc=100, qol=75, spesa_ssn=0,
                         )
-                        st.success("✅ Riga di prova scritta su 2getSIM_Database_Congressuale!")
+                        st.success("✅ Riga di prova scritta su Google Sheet!")
                     except Exception as err:
                         st.error(f"Errore scrittura Sheet: {err}")
             else:
-                st.warning("⚠️ Modulo google_db.py non ancora caricato nel repository.")
+                st.warning("⚠️ Modulo google_db.py non caricato nel repository.")
             if "ultimo_errore_gsheets" in st.session_state:
                 st.caption(f"⚠️ Ultimo avviso Sheets: {st.session_state['ultimo_errore_gsheets']}")
             st.divider()
@@ -349,11 +334,11 @@ with col_l:
 with col_r:
     nid = state["current_node"]
     if state["vitalita"] <= 0 and nid not in caso["esiti"]:
-        _render_quadro_conclusivo_sobrio(state, "Exitus clinico (Vitalità 0%)", "La somma delle tossicità o delle complicanze cliniche ha compromesso irreversibilmente la sopravvivenza del paziente prima del completamento del percorso.", chiave, anamnesi_open_key, room)
+        _render_quadro_conclusivo_sobrio(state, "Exitus clinico (Vitalità 0%)", "La somma delle tossicità o delle complicanze cliniche ha compromesso irreversibilmente la sopravvivenza del paziente.", chiave, anamnesi_open_key, room)
     elif state["oncologico"] <= 0 and nid not in caso["esiti"]:
-        _render_quadro_conclusivo_sobrio(state, "Progressione oncologica incontrollata (Controllo Oncologico 0%)", "I ritardi diagnostici o le scelte terapeutiche non adeguate alla biologia della malattia hanno chiuso la finestra di curabilità, portando a progressione sistemica estesa.", chiave, anamnesi_open_key, room)
+        _render_quadro_conclusivo_sobrio(state, "Progressione oncologica incontrollata (0%)", "I ritardi diagnostici o le scelte non adeguate alla biologia della malattia hanno chiuso la finestra di curabilità.", chiave, anamnesi_open_key, room)
     elif state["qol"] < 30 and nid not in caso["esiti"]:
-        _render_quadro_conclusivo_sobrio(state, "Interruzione volontaria delle cure (QoL < 30%)", "Il paziente si presenta in ambulatorio riferendo di non riuscire più a tollerare il carico terapeutico e sceglie di sospendere ogni trattamento attivo.", chiave, anamnesi_open_key, room)
+        _render_quadro_conclusivo_sobrio(state, "Interruzione volontaria delle cure (QoL < 30%)", "Il paziente riferisce di non riuscire più a tollerare il carico terapeutico e sospende ogni trattamento attivo.", chiave, anamnesi_open_key, room)
     elif nid in caso["nodi"]:
         nodo = caso["nodi"][nid]
         st.markdown(f"### {nodo['titolo']}")
@@ -367,9 +352,8 @@ with col_r:
         elif img_ref and os.path.exists(img_ref):
             st.image(img_ref, use_container_width=True)
         if "scelta_pendente" in state and role != "master":
-            scelta_reg = state["scelta_pendente"]["opt"]["testo"]
-            st.success(f"✅ **Scelta registrata:** _{scelta_reg}_")
-            st.info(f"⏳ **In attesa degli altri collegati ({n_pronti} su {n_attesi} hanno confermato).** Lo snodo successivo partirà automaticamente per tutti non appena l'ultimo partecipante avrà premuto Conferma.")
+            st.success(f"✅ **Scelta registrata:** _{state['scelta_pendente']['opt']['testo']}_")
+            st.info(f"⏳ **In attesa degli altri collegati ({n_pronti} su {n_attesi} hanno confermato).** Lo snodo successivo partirà automaticamente per tutti.")
             if n_attesi > 0:
                 st.progress(min(1.0, n_pronti / n_attesi))
             if st.button("✏️ Cambia risposta finché gli altri votano", use_container_width=True):
@@ -387,21 +371,15 @@ with col_r:
                 scelta = st.radio("Condotta clinica:", [o["testo"] for o in opzioni_ordinate])
                 if st.form_submit_button("Conferma Scelta ➡️", use_container_width=True):
                     opt = next(o for o in opzioni_ordinate if o["testo"] == scelta)
+                    state["scelta_pendente"] = {
+                        "nodo_id": nid,
+                        "nodo_titolo": nodo["titolo"],
+                        "opt": opt,
+                        "anamnesi_aperta": st.session_state[anamnesi_open_key],
+                    }
                     if role == "master":
-                        state["scelta_pendente"] = {
-                            "nodo_id": nid,
-                            "nodo_titolo": nodo["titolo"],
-                            "opt": opt,
-                            "anamnesi_aperta": st.session_state[anamnesi_open_key],
-                        }
                         _applica_scelta_in_coda(state, scenario_id=selected_id, postazione_id=bucket, room_ref=room)
                     else:
-                        state["scelta_pendente"] = {
-                            "nodo_id": nid,
-                            "nodo_titolo": nodo["titolo"],
-                            "opt": opt,
-                            "anamnesi_aperta": st.session_state[anamnesi_open_key],
-                        }
                         _sincronizza_barriera_aula(room, selected_id, caso, forzata=False)
                     st.session_state[anamnesi_open_key] = False
                     st.rerun()
