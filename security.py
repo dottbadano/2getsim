@@ -1,12 +1,14 @@
 import streamlit as st
 from text import APP_SUBTITLE, APP_TITLE
 
-MASTER_CREDENTIALS = {
-    "gbadano": "211280",
-    "acavo": "211186",
-    "smigone": "090286",
-}
-DEFAULT_PASS = "12345678"
+
+def _get_auth_config():
+    if "master_auth" in st.secrets:
+        cfg = dict(st.secrets["master_auth"])
+        default_pwd = str(cfg.pop("default_pass", "12345678"))
+        masters = {str(k): str(v) for k, v in cfg.items()}
+        return masters, default_pwd
+    return {}, "12345678"
 
 
 @st.cache_resource
@@ -32,7 +34,7 @@ def verifica_accesso():
             st.warning("Accesso revocato dalla Control Room.")
             st.stop()
 
-    if not st.session_state.authenticated:
+    if not st.session_state.authenticated or st.session_state.user_role not in ("master", "discente"):
         _login_screen(room)
         st.stop()
 
@@ -40,8 +42,10 @@ def verifica_accesso():
 
 
 def _login_screen(room):
+    masters, default_pwd = _get_auth_config()
     st.markdown(
-        f"<div style='text-align:center; padding:1.5rem 0;'><h1>⚡ {APP_TITLE}</h1><p style='color:#666;'>{APP_SUBTITLE}</p></div>",
+        f"<div style='text-align:center; padding:1.5rem 0;'><h1>⚡ {APP_TITLE}</h1>"
+        f"<p style='color:#666;'>{APP_SUBTITLE}</p></div>",
         unsafe_allow_html=True,
     )
     _, col, _ = st.columns([1, 2, 1])
@@ -50,11 +54,11 @@ def _login_screen(room):
             user = st.text_input("Nome Utente / Codice").strip()
             pwd = st.text_input("Password", type="password").strip()
             if st.form_submit_button("Entra in Aula", use_container_width=True):
-                if user in MASTER_CREDENTIALS and MASTER_CREDENTIALS[user] == pwd:
+                if user in masters and masters[user] == pwd:
                     st.session_state.update(authenticated=True, user_role="master", user_id=user)
                     st.rerun()
                 mappa = {u.lower(): u for u in room["utenti_autorizzati"]}
-                if user.lower() in mappa and pwd == DEFAULT_PASS:
+                if user.lower() in mappa and pwd == default_pwd:
                     st.session_state.update(authenticated=True, user_role="discente", user_id=mappa[user.lower()])
                     st.rerun()
                 st.error("Credenziali errate o accesso non abilitato.")
@@ -73,9 +77,11 @@ def risolvi_identita_gioco(room, role, uid):
 
 
 def render_regia_master(room, selected_case_id):
+    if st.session_state.get("user_role") != "master":
+        return
+
     st.divider()
     st.markdown("### 🎛️ Regia Master")
-
     if st.button("📌 Sincronizza caso per tutta l'aula", use_container_width=True):
         room["caso_attivo_globale"] = selected_case_id
         st.success(f"Caso {selected_case_id} attivo!")
@@ -102,10 +108,11 @@ def render_regia_master(room, selected_case_id):
                 for g in room["gruppi_personalizzati"]:
                     room["gruppi_personalizzati"][g] = [x for x in room["gruppi_personalizzati"][g] if x != sel]
                 st.rerun()
-            if st.button("🔒 Chiudi Aula (Cancella tutti)", use_container_width=True):
-                room["utenti_autorizzati"] = []
-                room["gruppi_personalizzati"] = {}
-                st.rerun()
+
+        if st.button("🔒 Chiudi Aula (Cancella tutti)", use_container_width=True):
+            room["utenti_autorizzati"] = []
+            room["gruppi_personalizzati"] = {}
+            st.rerun()
         elif st.button("🔄 Ripristina 001–014", use_container_width=True):
             room["utenti_autorizzati"] = [f"{i:03d}" for i in range(1, 15)]
             st.rerun()
@@ -129,7 +136,6 @@ def render_regia_master(room, selected_case_id):
                     room["gruppi_personalizzati"][g] = [u for u in room["gruppi_personalizzati"][g] if u not in g_membri]
                 room["gruppi_personalizzati"][g_nome] = list(g_membri)
                 st.rerun()
-
             for g in list(room["gruppi_personalizzati"].keys()):
                 c_txt, c_del = st.columns([4, 1])
                 c_txt.caption(f"**{g}**: {', '.join(room['gruppi_personalizzati'][g])}")
