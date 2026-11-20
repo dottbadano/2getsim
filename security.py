@@ -81,65 +81,70 @@ def render_regia_master(room, selected_case_id):
     if st.session_state.get("user_role") != "master":
         return
 
-    st.divider()
-    st.markdown("### 🎛️ Regia Master")
-    if st.button("📌 Sincronizza caso per tutta l'aula", use_container_width=True):
-        room["caso_attivo_globale"] = selected_case_id
-        st.success(f"Caso {selected_case_id} attivo!")
+    c_mod, c_sync = st.columns([1.4, 1])
+    with c_mod:
+        mod = st.radio(
+            "Modalità di gioco in aula:",
+            ["Singolo Discente", "Gruppi / Squadre"],
+            index=0 if room["modalita_attiva"] == "Singolo Discente" else 1,
+            horizontal=True,
+        )
+        if mod != room["modalita_attiva"]:
+            room["modalita_attiva"] = mod
+            st.rerun()
+    with c_sync:
+        st.write("")
+        if st.button(f"📌 Sincronizza Scenario {selected_case_id} per tutti", use_container_width=True):
+            room["caso_attivo_globale"] = selected_case_id
+            st.success(f"Scenario {selected_case_id} attivo per tutta l'aula!")
 
-    with st.expander("🔑 Gestione Accessi Discenti"):
-        nuovo = st.text_input("Aggiungi partecipante", placeholder="es. franco").strip()
-        if st.button("➕ Abilita Utente", use_container_width=True) and nuovo:
+    if room["modalita_attiva"] == "Gruppi / Squadre":
+        st.markdown("#### 🧩 Crea Squadre / Gruppi")
+        g1, g2, g3 = st.columns([1.3, 1.7, 1])
+        g_nome = g1.text_input("Nome squadra", placeholder="es. Squadra Alfa / Urologi").strip()
+        g_membri = g2.multiselect("Partecipanti nella squadra", room["utenti_autorizzati"])
+        g3.write("")
+        if g3.button("➕ Crea Squadra", use_container_width=True) and g_nome:
+            for g in room["gruppi_personalizzati"]:
+                room["gruppi_personalizzati"][g] = [u for u in room["gruppi_personalizzati"][g] if u not in g_membri]
+            room["gruppi_personalizzati"][g_nome] = list(g_membri)
+            st.rerun()
+
+        if room["gruppi_personalizzati"]:
+            for g in list(room["gruppi_personalizzati"].keys()):
+                col_t, col_d = st.columns([5, 1])
+                col_t.info(f"**{g}**: {', '.join(room['gruppi_personalizzati'][g]) or 'Nessun membro'}")
+                if col_d.button("🗑️", key=f"del_{g}"):
+                    del room["gruppi_personalizzati"][g]
+                    st.rerun()
+
+    with st.expander("🔑 Gestione Nomi & Accessi Partecipanti"):
+        u1, u2, u3 = st.columns([1.5, 1, 1])
+        nuovo = u1.text_input("Nuovo partecipante", placeholder="es. Dott. Rossi").strip()
+        u2.write("")
+        if u2.button("➕ Aggiungi", use_container_width=True) and nuovo:
             if nuovo.lower() not in [u.lower() for u in room["utenti_autorizzati"]]:
                 room["utenti_autorizzati"].append(nuovo)
                 st.rerun()
+        u3.write("")
+        if u3.button("🔄 Ripristina 001–014", use_container_width=True):
+            room["utenti_autorizzati"] = [f"{i:03d}" for i in range(1, 15)]
+            st.rerun()
 
         if room["utenti_autorizzati"]:
-            sel = st.selectbox("Utente attivo", room["utenti_autorizzati"])
-            rinomina = st.text_input("Rinomina in", value=sel).strip()
-            c1, c2 = st.columns(2)
-            if c1.button("✏️ Rinomina", use_container_width=True) and rinomina and rinomina != sel:
+            r1, r2, r3, r4 = st.columns([1.2, 1.2, 0.8, 0.8])
+            sel = r1.selectbox("Partecipante", room["utenti_autorizzati"])
+            rinomina = r2.text_input("Rinomina in", value=sel).strip()
+            r3.write("")
+            if r3.button("✏️ Salva", use_container_width=True) and rinomina and rinomina != sel:
                 idx = room["utenti_autorizzati"].index(sel)
                 room["utenti_autorizzati"][idx] = rinomina
                 for g, m in room["gruppi_personalizzati"].items():
                     room["gruppi_personalizzati"][g] = [rinomina if x == sel else x for x in m]
                 st.rerun()
-            if c2.button("🚫 Revoca", use_container_width=True):
+            r4.write("")
+            if r4.button("🚫 Revoca", use_container_width=True):
                 room["utenti_autorizzati"].remove(sel)
                 for g in room["gruppi_personalizzati"]:
                     room["gruppi_personalizzati"][g] = [x for x in room["gruppi_personalizzati"][g] if x != sel]
                 st.rerun()
-
-        if st.button("🔒 Chiudi Aula (Cancella tutti)", use_container_width=True):
-            room["utenti_autorizzati"] = []
-            room["gruppi_personalizzati"] = {}
-            st.rerun()
-        elif st.button("🔄 Ripristina 001–014", use_container_width=True):
-            room["utenti_autorizzati"] = [f"{i:03d}" for i in range(1, 15)]
-            st.rerun()
-
-    mod = st.radio(
-        "Modalità Sessione:",
-        ["Singolo Discente", "Gruppi / Squadre"],
-        index=0 if room["modalita_attiva"] == "Singolo Discente" else 1,
-    )
-    if mod != room["modalita_attiva"]:
-        room["modalita_attiva"] = mod
-        st.rerun()
-
-    if room["modalita_attiva"] == "Gruppi / Squadre":
-        with st.expander("🧩 Costruttore Libero Gruppi", expanded=True):
-            utenti = room["utenti_autorizzati"]
-            g_nome = st.text_input("Nome nuovo gruppo", placeholder="es. Urologi, Osp. X").strip()
-            g_membri = st.multiselect("Seleziona partecipanti", utenti)
-            if st.button("➕ Crea Gruppo", use_container_width=True) and g_nome:
-                for g in room["gruppi_personalizzati"]:
-                    room["gruppi_personalizzati"][g] = [u for u in room["gruppi_personalizzati"][g] if u not in g_membri]
-                room["gruppi_personalizzati"][g_nome] = list(g_membri)
-                st.rerun()
-            for g in list(room["gruppi_personalizzati"].keys()):
-                c_txt, c_del = st.columns([4, 1])
-                c_txt.caption(f"**{g}**: {', '.join(room['gruppi_personalizzati'][g])}")
-                if c_del.button("🗑️", key=f"del_{g}"):
-                    del room["gruppi_personalizzati"][g]
-                    st.rerun()
