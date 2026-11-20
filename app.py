@@ -18,7 +18,6 @@ except Exception:
 st.set_page_config(page_title="2getSIM", page_icon="⚡", layout="wide")
 apply_fonts()
 
-# Nasconde marchio, barra superiore e footer di Streamlit + abilita modalità Web App a schermo intero su tablet
 st.markdown(
     """
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -110,7 +109,6 @@ def _applica_scelta_in_coda(stato_run, scenario_id="", postazione_id="", room_re
     )
     stato_run["current_node"] = opt["next"]
 
-    # Registrazione automatica su Google Sheet (esclude gli account docente/master)
     entita_low = postazione_id.lower()
     is_docente = entita_low in ("gbadano", "acavo", "smigone") or entita_low.startswith("master")
     if GSHEETS_ATTIVO and not is_docente:
@@ -168,14 +166,13 @@ def _sincronizza_barriera_aula(room, selected_id, caso_dict, forzata=False):
 
 def _colore_barra(valore):
     if valore >= 65:
-        return "#16a34a"  # Verde clinico
+        return "#16a34a"
     if valore >= 35:
-        return "#d97706"  # Ambra
-    return "#dc2626"      # Rosso critico
+        return "#d97706"
+    return "#dc2626"
 
 
 def _render_quadro_conclusivo_sobrio(state, stato_clinico_label, nota_clinica, chiave, anamnesi_open_key, room):
-    """Mostra il quadro finale sobrio con le 3 barre cliniche in grande evidenza e la cronologia con razionale."""
     vit = max(0, min(100, state.get("vitalita", 0)))
     onc = max(0, min(100, state.get("oncologico", 0)))
     qol = max(0, min(100, state.get("qol", 0)))
@@ -225,4 +222,118 @@ def _render_quadro_conclusivo_sobrio(state, stato_clinico_label, nota_clinica, c
 
     badge_col = {"verde": "🟢", "giallo": "🟡", "blu": "🔵", "rosso": "🔴"}
     with st.expander("🗂️ Riepilogo decisioni e razionale clinico EAU/ESMO", expanded=True):
-        for idx
+        percorso_svolto = state.get("percorso", [])
+        for i in range(len(percorso_svolto)):
+            step = percorso_svolto[i]
+            icona = badge_col.get(step.get("colore", ""), "⚪")
+            st.markdown(f"**{i + 1}. {step['nodo']}** — {icona} `{step['scelta']}`")
+            if step.get("razionale"):
+                st.caption(f"💡 *Razionale:* {step['razionale']}")
+
+    if st.button("🔄 Ripeti Simulazione", use_container_width=True):
+        room.get("stati_casi", {}).pop(chiave, None)
+        st.session_state[anamnesi_open_key] = False
+        st.rerun()
+
+
+with st.sidebar:
+    st.markdown(f"### 👤 **{etichetta}**")
+    c1, c2 = st.columns(2)
+    if c1.button("🔄 Aggiorna", use_container_width=True):
+        st.rerun()
+    if c2.button("Esci", use_container_width=True):
+        st.session_state.authenticated = False
+        st.rerun()
+
+    st.divider()
+    vista_master = "🎮 Simulazione Aula"
+    if role == "master":
+        vista_master = st.radio(
+            "Vista Docente:",
+            ["🎮 Simulazione Aula", "🧠 Osservatorio Errori & Gruppi", "✍️ Crea Caso Clinico"],
+        )
+        st.divider()
+
+    caso_attivo = room.get("caso_attivo_globale")
+    if cases:
+        idx = cases.index(caso_attivo) if caso_attivo in cases else 0
+        selected_id = st.selectbox("Seleziona Scenario", cases, index=idx, format_func=get_case_label)
+    else:
+        selected_id = None
+
+    if role == "master" and selected_id:
+        render_regia_master(room, selected_id)
+
+if role == "master" and vista_master == "✍️ Crea Caso Clinico":
+    render_case_builder(CASE_DIR)
+    st.stop()
+
+if role == "master" and vista_master == "🧠 Osservatorio Errori & Gruppi":
+    render_osservatorio_master(room, role)
+    st.stop()
+
+if not selected_id:
+    st.error("Inserisci almeno un file nella cartella 'storycase/' (es. 001.py) oppure crealo da 'Crea Caso Clinico'.")
+    st.stop()
+
+mod = importlib.import_module(f"{CASE_DIR}.{selected_id}")
+importlib.reload(mod)
+caso = mod.CASO
+
+stati_casi = room.setdefault("stati_casi", {})
+chiave = f"{selected_id}__{bucket}"
+if chiave not in stati_casi:
+    stati_casi[chiave] = {
+        "etichetta": etichetta,
+        "current_node": caso["nodo_iniziale"],
+        "vitalita": caso.get("vitalita_iniziale", 100),
+        "oncologico": caso.get("oncologico_iniziale", 100),
+        "qol": caso.get("qol_iniziale", 75),
+        "percorso": [],
+        "ordine_opzioni": {},
+        "consultazioni_anamnesi": 0,
+    }
+
+state = stati_casi[chiave]
+n_pronti, n_attesi, sbloccato = _sincronizza_barriera_aula(room, selected_id, caso, forzata=False)
+if sbloccato:
+    st.rerun()
+
+anamnesi_open_key = f"show_anamnesi_{chiave}"
+if anamnesi_open_key not in st.session_state:
+    st.session_state[anamnesi_open_key] = False
+
+st.markdown(
+    f"""
+    <div style="background: linear-gradient(135deg, #1e293b, #0f172a); padding: 1.4rem; border-radius: 12px; color: white; margin-bottom: 1.5rem;">
+        <span style="background: #334155; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem;">Postazione: {etichetta}</span>
+        <h2 style="margin: 0.5rem 0 0.2rem 0; font-size: 1.45rem;">{caso['titolo']}</h2>
+        <p style="margin: 0; color: #94a3b8; font-size: 0.95rem;">{caso.get('sottotitolo', '')}</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+col_l, col_r = st.columns([1.15, 1.75], gap="large")
+
+with col_l:
+    st.markdown("### 📊 Parametri Paziente")
+    vit_c = max(0, min(100, state["vitalita"]))
+    onc_c = max(0, min(100, state["oncologico"]))
+    qol_c = max(0, min(100, state["qol"]))
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("❤️ Vitalità", f"{vit_c}%")
+    m2.metric("🎯 Controllo Onc.", f"{onc_c}%")
+    m3.metric("🌿 Qualità di Vita", f"{qol_c}%")
+
+    if 30 <= qol_c < 40 and not _is_terminato(state, caso):
+        st.warning("⚠️ Qualità di Vita critica: il paziente fatica a tollerare il carico terapeutico.")
+
+    st.divider()
+
+    if len(state["percorso"]) == 0:
+        st.markdown("### 📋 Cartella Paziente & Anamnesi")
+        st.info(caso["scheda_paziente"])
+    else:
+        if not st.session_state[anam
