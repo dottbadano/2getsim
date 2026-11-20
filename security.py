@@ -6,7 +6,7 @@ def _get_auth_config():
     if "master_auth" in st.secrets:
         cfg = dict(st.secrets["master_auth"])
         default_pwd = str(cfg.pop("default_pass", "12345678"))
-        masters = {str(k): str(v) for k, v in cfg.items()}
+        masters = {str(k).strip().lower(): str(v).strip() for k, v in cfg.items()}
         return masters, default_pwd
     return {}, "12345678"
 
@@ -54,12 +54,13 @@ def _login_screen(room):
             user = st.text_input("Nome Utente / Codice").strip()
             pwd = st.text_input("Password", type="password").strip()
             if st.form_submit_button("Entra in Aula", use_container_width=True):
-                if user in masters and masters[user] == pwd:
-                    st.session_state.update(authenticated=True, user_role="master", user_id=user)
+                u_low = user.lower()
+                if u_low in masters and masters[u_low] == pwd:
+                    st.session_state.update(authenticated=True, user_role="master", user_id=u_low)
                     st.rerun()
                 mappa = {u.lower(): u for u in room["utenti_autorizzati"]}
-                if user.lower() in mappa and pwd == default_pwd:
-                    st.session_state.update(authenticated=True, user_role="discente", user_id=mappa[user.lower()])
+                if u_low in mappa and pwd == default_pwd:
+                    st.session_state.update(authenticated=True, user_role="discente", user_id=mappa[u_low])
                     st.rerun()
                 st.error("Credenziali errate o accesso non abilitato.")
 
