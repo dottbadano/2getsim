@@ -1,4 +1,5 @@
 import streamlit as st
+from login_button import render_login_button
 from text import APP_SUBTITLE, APP_TITLE
 
 
@@ -24,7 +25,7 @@ def get_global_room():
 
 def verifica_accesso():
     room = get_global_room()
-    for k, v in [("authenticated", False), ("user_role", None), ("user_id", None)]:
+    for k, v in [("authenticated", False), ("user_role", None), ("user_id", None), ("login_error", False)]:
         if k not in st.session_state:
             st.session_state[k] = v
 
@@ -50,19 +51,40 @@ def _login_screen(room):
     )
     _, col, _ = st.columns([1, 2, 1])
     with col:
-        with st.form("login_form"):
-            user = st.text_input("Nome Utente / Codice").strip()
-            pwd = st.text_input("Password", type="password").strip()
-            if st.form_submit_button("Entra in Aula", use_container_width=True):
-                u_low = user.lower()
-                if u_low in masters and masters[u_low] == pwd:
-                    st.session_state.update(authenticated=True, user_role="master", user_id=u_low)
-                    st.rerun()
-                mappa = {u.lower(): u for u in room["utenti_autorizzati"]}
-                if u_low in mappa and pwd == default_pwd:
-                    st.session_state.update(authenticated=True, user_role="discente", user_id=mappa[u_low])
-                    st.rerun()
-                st.error("Credenziali errate o accesso non abilitato.")
+        user = st.text_input("Nome Utente / Codice").strip()
+        pwd = st.text_input("Password", type="password").strip()
+
+        # Pulsante animato (? -> X -> = 2)
+        trigger_err = st.session_state.get("login_error", False)
+        st.session_state.login_error = False
+        render_login_button(trigger_error=trigger_err)
+
+        # Bottone reale di Streamlit nascosto visivamente, attivato al termine dell'animazione
+        st.markdown(
+            """
+            <style>
+            div.stButton > button:has(p:contains("SUBMIT_HIDDEN")) {
+                display: none;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if st.button("SUBMIT_HIDDEN"):
+            u_low = user.lower()
+            if u_low in masters and masters[u_low] == pwd:
+                st.session_state.update(authenticated=True, user_role="master", user_id=u_low, login_error=False)
+                st.rerun()
+            mappa = {u.lower(): u for u in room["utenti_autorizzati"]}
+            if u_low in mappa and pwd == default_pwd:
+                st.session_state.update(authenticated=True, user_role="discente", user_id=mappa[u_low], login_error=False)
+                st.rerun()
+            st.session_state.login_error = True
+            st.rerun()
+
+        if trigger_err:
+            st.error("Credenziali errate o accesso non abilitato.")
 
 
 def risolvi_identita_gioco(room, role, uid):
