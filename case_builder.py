@@ -1,188 +1,138 @@
-import base64
-import json
-import os
-import pprint
-import urllib.error
-import urllib.request
+import base64, json, os, pprint, urllib.error, urllib.request
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
-
 import streamlit as st
-
 from google_db import (
-    carica_caso_drive,
-    carica_file_drive_su_gemini,
-    carica_immagine_drive,
-    elenca_casi_drive,
-    elenca_documenti_bibliografia,
-    pubblica_caso_enterprise,
-    ritira_caso_in_bozza,
-    salva_caso_drive,
-    scarica_immagine_drive,
+    carica_caso_drive, carica_file_drive_su_gemini, carica_immagine_drive,
+    elenca_casi_drive, elenca_documenti_bibliografia, pubblica_caso_enterprise,
+    ritira_caso_in_bozza, salva_caso_drive, scarica_immagine_drive,
 )
 
 COLORI_CLINICI = {
-    "🟩 Verde — Esatta (Condotta tailored ottimale)": {
-        "codice": "verde",
-        "d_vit": 5,
-        "d_onc": 15,
-        "d_qol": 5,
-        "hex": "#16a34a",
-        "bg": "#dcfce7",
-    },
-    "🟦 Blu — Ridondante / Difensiva (Esame in più, fa perdere tempo)": {
-        "codice": "blu",
-        "d_vit": 0,
-        "d_onc": -5,
-        "d_qol": -5,
-        "hex": "#2563eb",
-        "bg": "#dbeafe",
-    },
-    "🟨 Gialla — Trappola Linea Guida (Ammessa da LG, ma tossica/inadeguata qui)": {
-        "codice": "giallo",
-        "d_vit": -10,
-        "d_onc": -15,
-        "d_qol": -25,
-        "hex": "#ca8a04",
-        "bg": "#fef9c3",
-    },
-    "🟥 Rossa — Sbagliata (Errore clinico grave / Pericolosa)": {
-        "codice": "rosso",
-        "d_vit": -20,
-        "d_onc": -30,
-        "d_qol": -20,
-        "hex": "#dc2626",
-        "bg": "#fee2e2",
-    },
+    "🟩 Verde — Esatta (Tailored ottimale)": {"codice": "verde", "d_vit": 5, "d_onc": 15, "d_qol": 5, "hex": "#16a34a", "bg": "#dcfce7"},
+    "🟦 Blu — Ridondante / Difensiva": {"codice": "blu", "d_vit": 0, "d_onc": -5, "d_qol": -5, "hex": "#2563eb", "bg": "#dbeafe"},
+    "🟨 Gialla — Trappola Linea Guida": {"codice": "giallo", "d_vit": -10, "d_onc": -15, "d_qol": -25, "hex": "#ca8a04", "bg": "#fef9c3"},
+    "🟥 Rossa — Sbagliata / Pericolosa": {"codice": "rosso", "d_vit": -20, "d_onc": -30, "d_qol": -20, "hex": "#dc2626", "bg": "#fee2e2"},
 }
-
-MAPPA_CODICE_TO_LABEL = {v["codice"]: k for k, v in COLORI_CLINICI.items()}
-ORDINE_DEFAULT_4 = ["verde", "blu", "giallo", "rosso"]
-
-AMBITI_PATOLOGIA = {
-    "vescica": "🫧 Vescica / Carcinoma Uroteliale",
-    "prostata": "🩺 Prostata",
-    "rene": "🫘 Rene / Urotelio Alto",
-}
-
-KEYWORDS_VESCICA = (
-    "vescic", "bladder", "nmibc", "mibc", "urotel", "urothel", "utuc",
-    "enfortumab", "padcev", "pembrolizumab", "keytruda", "avelumab", "bavencio",
-    "durvalumab", "imfinzi", "nivolumab", "opdivo", "erdafitinib", "balversa",
-    "cisplat", "carboplat", "gemcitab", "mitomicin", "mitomycin", "bcg",
-    "nadofaragene", "cretostimogene", "nogapendekin", "ev-302", "niagara",
-    "checkmate-274", "javelin", "ambassador", "thor", "sunrise",
-)
-
-KEYWORDS_PROSTATA = (
-    "prostat", "mcrpc", "mcspc", "mhspc", "nmcrpc", "bcr",
-    "apalutamid", "erleada", "darolutamid", "nubeqa", "enzalutamid", "xtandi",
-    "abirateron", "zytiga", "olaparib", "lynparza", "talazoparib", "talzenna",
-    "niraparib", "akeega", "docetaxel", "taxotere", "cabazitaxel", "jevtana",
-    "eligard", "leuprorelin", "enantone", "decapeptyl", "triptorelin",
-    "degarelix", "firmagon", "relugolix", "orgovyx", "bicalutamid", "casodex",
-    "xofigo", "radium", "radio-223", "pluvicto", "lutezio", "lutetium", "psma",
-    "peace", "aranote", "arasens", "titan", "latitude", "stampede", "propel",
-    "magnitude", "talapro", "vision", "psmafore", "proteus", "dasl", "embark",
-    "capitello", "capivasertib",
-)
+MAPPA_COD_LBL = {v["codice"]: k for k, v in COLORI_CLINICI.items()}
+ORDINE_4 = ["verde", "blu", "giallo", "rosso"]
+AMBITI = {"vescica": "🫧 Vescica / Urotelio", "prostata": "🩺 Prostata", "rene": "🫘 Rene / UTUC"}
+KW_VESCICA = ("vescic", "bladder", "nmibc", "mibc", "urotel", "urothel", "utuc", "enfortumab", "pembrolizumab", "avelumab", "durvalumab", "nivolumab", "erdafitinib", "cisplat", "gemcitab", "bcg", "ev-302", "niagara")
+KW_PROSTATA = ("prostat", "mcrpc", "mcspc", "mhspc", "nmcrpc", "apalutamid", "darolutamid", "enzalutamid", "abirateron", "olaparib", "talazoparib", "niraparib", "docetaxel", "cabazitaxel", "relugolix", "radium", "pluvicto", "psma", "peace", "aranote", "arasens", "titan", "embark")
 
 
-def _calcola_profondita_minima_esiti(dati: Dict[str, Any]) -> Tuple[int, int]:
-    """Restituisce (profondita_minima_assoluta, profondita_minima_non_rosso) dal nodo iniziale."""
-    nodi = dati.get("nodi", {})
-    esiti = set(dati.get("esiti", {}).keys())
+def _profondita_minima(dati: Dict[str, Any]) -> Tuple[int, int]:
+    nodi, esiti = dati.get("nodi", {}), set(dati.get("esiti", {}).keys())
     start = dati.get("nodo_iniziale", "snodo1")
     if start not in nodi:
         return 0, 0
+    min_all, min_non_red = 999, 999
 
-    min_assoluta = 999
-    min_non_rosso = 999
-
-    def _dfs(curr: str, depth: int, solo_rosso: bool, visited: set):
-        nonlocal min_assoluta, min_non_rosso
+    def dfs(curr: str, d: int, all_red: bool, vis: set):
+        nonlocal min_all, min_non_red
         if curr in esiti:
-            min_assoluta = min(min_assoluta, depth)
-            if not solo_rosso:
-                min_non_rosso = min(min_non_rosso, depth)
+            min_all = min(min_all, d)
+            if not all_red:
+                min_non_red = min(min_non_red, d)
             return
-        if curr not in nodi or curr in visited or depth > 20:
+        if curr not in nodi or curr in vis or d > 20:
             return
-        visited_next = visited | {curr}
-        for opt in nodi[curr].get("opzioni", []):
-            if not opt.get("testo", "").strip():
-                continue
-            nxt = opt.get("next", "")
-            is_red = opt.get("colore") == "rosso"
-            _dfs(nxt, depth + 1, solo_rosso and is_red, visited_next)
+        for o in nodi[curr].get("opzioni", []):
+            if o.get("testo", "").strip():
+                dfs(o.get("next", ""), d + 1, all_red and (o.get("colore") == "rosso"), vis | {curr})
 
-    _dfs(start, 0, True, set())
-    return (0 if min_assoluta == 999 else min_assoluta), (0 if min_non_rosso == 999 else min_non_rosso)
+    dfs(start, 0, True, set())
+    return (0 if min_all == 999 else min_all), (0 if min_non_red == 999 else min_non_red)
 
 
-def _valida_contratto_v2(dati: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    avvisi: List[str] = []
-    meta = dati.get("meta", {})
+def _valida_v2(dati: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    err = []
+    meta, t0, nodi = dati.get("meta", {}), dati.get("paziente_t0", {}), dati.get("nodi", {})
     if not meta.get("case_id") or not meta.get("titolo"):
-        avvisi.append("Mancano `Codice Caso` o `Titolo` nei metadati.")
-
-    t0 = dati.get("paziente_t0", {})
-    for k in ("vitalita_iniziale", "oncologico_iniziale", "qol_iniziale"):
-        val = t0.get(k)
-        if not isinstance(val, (int, float)) or not (0 <= val <= 100):
-            avvisi.append(f"Parametro T0 `{k}` fuori scala 0-100.")
-
-    nodi = dati.get("nodi", {})
+        err.append("Mancano Codice Caso o Titolo.")
     if len(nodi) < 8:
-        avvisi.append(f"Numero snodi insufficiente ({len(nodi)}): il caso deve svilupparsi su almeno 8-10 snodi.")
-
-    min_ass, min_non_red = _calcola_profondita_minima_esiti(dati)
-    if 0 < min_ass < 6:
-        avvisi.append(f"Un percorso termina troppo presto allo snodo {min_ass}: anche scegliendo sempre Rosso il caso deve durare almeno 6 snodi.")
-    if 0 < min_non_red < 8:
-        avvisi.append(f"Un percorso non-Rosso termina allo snodo {min_non_red}: i percorsi standard devono durare almeno 8-10 snodi.")
-
-    for sid, snodo in nodi.items():
-        opzioni = [o for o in snodo.get("opzioni", []) if o.get("testo", "").strip()]
-        if len(opzioni) != 4:
-            avvisi.append(f"Snodo `{sid}`: servono esattamente 4 opzioni compilate (attuali: {len(opzioni)}).")
+        err.append(f"Snodi attuali {len(nodi)}: servono almeno 8-10 snodi.")
+    m_all, m_nr = _profondita_minima(dati)
+    if 0 < m_all < 6:
+        err.append(f"Un percorso chiude allo snodo {m_all}: anche sempre Rosso deve durare min. 6 snodi.")
+    if 0 < m_nr < 8:
+        err.append(f"Un percorso non-Rosso chiude allo snodo {m_nr}: deve durare almeno 8-10 snodi.")
+    for sid, sn in nodi.items():
+        opts = [o for o in sn.get("opzioni", []) if o.get("testo", "").strip()]
+        if len(opts) != 4:
+            err.append(f"{sid}: servono 4 opzioni compilate (attuali: {len(opts)}).")
             continue
-
-        colori = [o.get("colore", "") for o in opzioni]
-        if snodo.get("is_post_rosso", False):
-            if not (colori.count("verde") == 0 and colori.count("blu") == 2 and colori.count("giallo") == 1 and colori.count("rosso") == 1):
-                avvisi.append(
-                    f"Snodo `{sid}` (post-errore grave): distribuzione colori richiesta 0V / 2B / 1G / 1R (attuale: {colori})."
-                )
-
-        for idx, o in enumerate(opzioni, 1):
-            parole = len(o["testo"].split())
-            if parole < 2 or parole > 7:
-                avvisi.append(f"Snodo `{sid}` opz. {idx} ('{o['testo']}'): target 2-6 parole (attuali: {parole}).")
-
-    return len(avvisi) == 0, avvisi
+        cols = [o.get("colore", "") for o in opts]
+        if sn.get("is_post_rosso") and not (cols.count("verde") == 0 and cols.count("blu") == 2 and cols.count("giallo") == 1 and cols.count("rosso") == 1):
+            err.append(f"{sid} (post-Rosso): richiesti 0V / 2B / 1G / 1R.")
+        for i, o in enumerate(opts, 1):
+            w = len(o["testo"].split())
+            if w < 2 or w > 7:
+                err.append(f"{sid} opz.{i} ('{o['testo']}'): target 2-6 parole ({w}).")
+    return len(err) == 0, err
 
 
-def _seleziona_documenti_per_ambito(tutti_docs: List[Dict[str, str]], ambito: str) -> List[Dict[str, str]]:
-    selezionati = []
-    for doc in tutti_docs:
-        nome_low = doc["name"].lower()
-        is_vescica = any(k in nome_low for k in KEYWORDS_VESCICA)
-        is_prostata = any(k in nome_low for k in KEYWORDS_PROSTATA)
-        if ambito == "vescica":
-            if is_vescica or not is_prostata:
-                selezionati.append(doc)
-        elif ambito == "prostata":
-            if is_prostata or not is_vescica:
-                selezionati.append(doc)
-        else:
-            selezionati.append(doc)
-    return selezionati
-
-
-def _prepara_parti_biblioteca(ambito: str, api_key: str) -> Tuple[List[Dict[str, Any]], List[str]]:
-    parti: List[Dict[str, Any]] = []
-    nomi: List[str] = []
+def _parti_biblio(ambito: str, api_key: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    parti, nomi = [], []
     try:
-        tutti_docs = elenca_documenti_bibliografia()
-        docs_filtrati =
+        for d in elenca_documenti_bibliografia():
+            nl = d["name"].lower()
+            v, p = any(k in nl for k in KW_VESCICA), any(k in nl for k in KW_PROSTATA)
+            if (ambito == "vescica" and not v and p) or (ambito == "prostata" and not p and v):
+                continue
+            try:
+                uri = carica_file_drive_su_gemini(d["id"], d["name"], d["mimeType"], api_key)
+                parti.append({"file_data": {"mime_type": d["mimeType"], "file_uri": uri}})
+                nomi.append(f"[{d['categoria']}] {d['name']}")
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return parti, nomi
+
+
+def _gemini_json(parti: List[Dict[str, Any]], api_key: str, temp: float = 0.3) -> Tuple[bool, Any]:
+    payload = {"contents": [{"parts": parti}], "generationConfig": {"temperature": temp, "responseMimeType": "application/json"}}
+    last_err = ""
+    for mod in ("gemini-2.5-pro", "gemini-2.5-flash"):
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{mod}:generateContent?key={api_key}"
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "x-goog-api-key": api_key}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=150) as resp:
+                txt = json.loads(resp.read().decode("utf-8"))["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if txt.startswith("```"):
+                    txt = txt.strip("`").strip()
+                    if txt.lower().startswith("json"):
+                        txt = txt[4:].strip()
+                return True, json.loads(txt)
+        except urllib.error.HTTPError as e:
+            last_err = f"Errore Gemini ({e.code}): {e.read().decode('utf-8', errors='ignore')[:180]}"
+            if e.code != 404:
+                break
+        except Exception as e:
+            last_err = f"Errore Gemini: {e}"
+            break
+    return False, last_err
+
+
+def _genera_caso_ai(cid: str, ambito: str, spunto: str, n_snodi: int = 9) -> Tuple[bool, Any]:
+    api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return False, "Manca GEMINI_API_KEY nei Secrets."
+    parti_b, nomi = _parti_biblio(ambito, api_key)
+    fonti = ", ".join(nomi) if nomi else "Linee Guida EAU/ESMO"
+    prompt = (
+        f"Direttore Scientifico 2getSIM. Genera JSON v2.0 da Biblioteca PDF ({fonti}).\n"
+        f"case_id='{cid}', area_clinica='{ambito}', snodi longitudinali={n_snodi} (min 8, max 10). Spunto: {spunto}\n"
+        "REGOLE INDEROGABILI:\n"
+        f"1. DURATA: percorsi verde/blu/giallo DEVONO durare 8-10 snodi (snodo1..snodo{n_snodi}); NESSUN esito_* prima di snodo8. Anche scegliendo sempre rosso, passaggio su snodi is_post_rosso=true e chiusura esito_sconfitta solo dal 6° snodo in poi.\n"
+        "2. T0 (30enne sano=100/100/100): sottrai punti reali per età/eGFR/comorbidità/carico e documenta in calibrazione_t0.\n"
+        "3. MINE PSICOLOGICHE: trappola_urologo e trappola_oncologo; opzioni giallo e blu con effetto_ritardato=true.\n"
+        "4. OPZIONI: 4 per snodo (verde,blu,giallo,rosso), comando operativo secco 2-6 parole, zero parentesi, con razionale.\n"
+        "5. POST-ROSSO (is_post_rosso=true): 0 verde, 2 blu, 1 giallo, 1 rosso.\n"
+        'Schema JSON esatto: {"schema_version":"2.0","meta":{"case_id":"","area_clinica":"","stato":"bozza","versione":1,"titolo":"","sottotitolo":"","descrizione_master":"","audit_clinico":""},'
+        '"paziente_t0":{"vitalita_iniziale":80,"oncologico_iniziale":55,"qol_iniziale":75,"calibrazione_t0":{"vitalita_motivo":"","oncologico_motivo":"","qol_motivo":""},"scheda_paziente":"","mine_psicologiche":{"trappola_urologo":"","trappola_oncologo":""}},'
+        '"nodo_iniziale":"snodo1","nodi":{"snodo1":{"titolo":"","testo":"","is_post_rosso":false,"opzioni":[{"testo":"2-6 parole","colore":"verde","d_vit":5,"d_onc":15,"d_qol":5,"effetto_ritardato":false,"razionale":"","next":"snodo2"}]}},'
+        '"esiti":{"esito_vittoria":{"tipo":"bianco","titolo":"ESITO OTTIMALE","descrizione":"","debriefing_master":""},"esito_parziale":{"tipo":"giallo","titolo":"ESITO INTERMEDIO","descrizione":"","debriefing_master":""},"esito_sconfitta":{"tipo":"rosso","titolo":"ESITO CRITICO","descrizione":"","debriefing_master":""}}}'
+    )
+    ok, res = _gemini
