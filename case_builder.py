@@ -2,7 +2,6 @@ import base64
 import json
 import os
 import pprint
-import re
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -186,93 +185,4 @@ def _prepara_parti_biblioteca(ambito: str, api_key: str) -> Tuple[List[Dict[str,
     nomi: List[str] = []
     try:
         tutti_docs = elenca_documenti_bibliografia()
-        docs_filtrati = _seleziona_documenti_per_ambito(tutti_docs, ambito)
-        for doc in docs_filtrati:
-            try:
-                f_uri = carica_file_drive_su_gemini(doc["id"], doc["name"], doc["mimeType"], api_key)
-                parti.append({"file_data": {"mime_type": doc["mimeType"], "file_uri": f_uri}})
-                nomi.append(f"[{doc['categoria']}] {doc['name']}")
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return parti, nomi
-
-
-def _chiama_gemini_json(parti_contenuto: List[Dict[str, Any]], api_key: str, temperature: float = 0.3) -> Tuple[bool, Any]:
-    payload = {
-        "contents": [{"parts": parti_contenuto}],
-        "generationConfig": {
-            "temperature": temperature,
-            "responseMimeType": "application/json",
-        },
-    }
-    ultimo_errore = ""
-    for modello in ("gemini-2.5-pro", "gemini-2.5-flash"):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modello}:generateContent?key={api_key}"
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=150) as resp:
-                raw = json.loads(resp.read().decode("utf-8"))
-                testo = raw["candidates"][0]["content"]["parts"][0]["text"].strip()
-                testo = re.sub(r"^```json\s*|\s*```$", "", testo)
-                return True, json.loads(testo)
-        except urllib.error.HTTPError as e:
-            dettaglio = e.read().decode("utf-8", errors="ignore")
-            ultimo_errore = f"Errore Gemini ({e.code}): {dettaglio[:200]}"
-            if e.code != 404:
-                break
-        except Exception as e:
-            ultimo_errore = f"Errore chiamata Gemini: {e}"
-            break
-    return False, ultimo_errore
-
-
-def _genera_intero_caso_v2(case_id: str, ambito: str, spunto_clinico: str, num_snodi: int = 9) -> Tuple[bool, Any]:
-    api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        return False, "Manca GEMINI_API_KEY nei Secrets di Streamlit."
-
-    parti_biblio, nomi_fonti = _prepara_parti_biblioteca(ambito, api_key)
-    fonti_txt = "\n- ".join(nomi_fonti) if nomi_fonti else "Nessun PDF trovato nella cartella Biblioteca."
-
-    prompt = f"""Sei il Direttore Scientifico di 2getSIM, simulatore clinico uro-oncologico ad alta fedeltà progettato per rompere l'inerzia specialistica di urologi e oncologi.
-
-Genera un intero caso clinico completo nel formato JSON v2.0 basandoti sulla biblioteca PDF allegata (Linee Guida EAU, ESMO, Schede Tecniche RCP e Studi Clinici) e sullo spunto clinico fornito.
-
-BIBLIOTECA PDF CARICATA:
-- {fonti_txt}
-
-SPECIFICHE DEL CASO:
-- case_id: "{case_id}"
-- area_clinica: "{ambito}"
-- Lunghezza longitudinale del percorso principale: {num_snodi} snodi (minimo 8, massimo 10 snodi)
-- Spunto clinico dell'autore:
-{spunto_clinico}
-
-REGOLE CLINICHE, STRUTTURALI E PSICOLOGICHE INDEROGABILI:
-1. ARCHITETTURA LONGITUDINALE (8-10 SNODI / MINIMO 6 SOLO SE SEMPRE ROSSO):
-   - Il percorso clinico principale (scelte `verde`, `blu`, `giallo`) DEVE svilupparsi per **almeno 8-10 snodi** consecutivi (`snodo1` -> `snodo2` -> ... -> `snodo{num_snodi}`) seguendo l'intera storia naturale della malattia (diagnosi/stadiazione, prima linea, gestione tossicità/complicanze, rivalutazione strumentale, seconda linea/salvataggio).
-   - NESSUNA opzione `verde`, `blu` o `giallo` può puntare a un `esito_*` prima dello snodo 8.
-   - Anche se il discente sceglie ripetutamente `rosso`, il caso NON può terminare subito: deve attraversare snodi di deterioramento (`is_post_rosso: true`) e può chiudersi in `esito_sconfitta` **solo dal 6° snodo in poi**.
-2. BENCHMARK T0 (30enne sano = 100/100/100):
-   - Calibra `vitalita_iniziale`, `oncologico_iniziale` e `qol_iniziale` sottraendo punti reali in base a età, eGFR, comorbidità, fragilità e carico tumorale. Documenta i motivi in `calibrazione_t0`.
-3. MINE PSICOLOGICHE SILENZIOSE:
-   - Inserisci trappole specifiche per l'urologo e per l'oncologo in `mine_psicologiche`.
-   - Le opzioni `giallo` (formalmente ammessa da Linea Guida ma tossica/inadeguata in questo paziente per RCP/comorbidità) e `blu` (difensiva/ridondante) devono sembrare ragionevoli e avere `effetto_ritardato: true` (danno evidente 2-3 snodi dopo, effetto "Cuore rivelatore").
-4. SIMMETRIA LESSICALE DELLE OPZIONI:
-   - Ogni snodo ha ESATTAMENTE 4 opzioni.
-   - Ogni opzione (`testo`) deve essere un comando operativo secco di **2-6 parole**, senza aggettivi qualificativi, senza parentesi esplicative e senza suggerire la risposta corretta tramite la lunghezza.
-5. VINCOLO POST-ROSSO:
-   - Negli snodi successivi a un errore `rosso` (`is_post_rosso: true`), la guarigione piena non è più raggiungibile: le 4 opzioni devono essere `0 verde`, `2 blu` (salvataggio/palliazione), `1 giallo`, `1 rosso`.
-6. GRAFO COERENTE:
-   - Chiavi nodi: `"snodo1"`, `"snodo2"`, ..., `"snodo{num_snodi}"` (più eventuali snodi dedicati `is_post_rosso`) con `nodo_iniziale: "snodo1"`.
-   - Ogni `next` deve puntare a uno snodo esistente o a uno degli esiti: `"esito_vittoria"`, `"esito_parziale"`, `"esito_sconfitta"`.
-
-Restituisci ESCLUSIVAMENTE questo oggetto JSON valido:
-{{
+        docs_filtrati =
