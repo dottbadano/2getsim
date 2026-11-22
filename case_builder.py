@@ -1,138 +1,192 @@
-import base64, json, os, pprint, urllib.error, urllib.request
+import os, pprint
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
 import streamlit as st
+from case_builder_engine import (
+    AMBITI, COLORI_CLINICI, MAPPA_COD_LBL, ORDINE_4, dot_graphviz,
+    genera_3_opzioni_snodo, genera_caso_ai, nuovo_snodo, template_v2, valida_v2,
+)
 from google_db import (
-    carica_caso_drive, carica_file_drive_su_gemini, carica_immagine_drive,
-    elenca_casi_drive, elenca_documenti_bibliografia, pubblica_caso_enterprise,
-    ritira_caso_in_bozza, salva_caso_drive, scarica_immagine_drive,
+    carica_caso_drive, carica_immagine_drive, elenca_casi_drive,
+    pubblica_caso_enterprise, ritira_caso_in_bozza, salva_caso_drive, scarica_immagine_drive,
 )
 
-COLORI_CLINICI = {
-    "🟩 Verde — Esatta (Tailored ottimale)": {"codice": "verde", "d_vit": 5, "d_onc": 15, "d_qol": 5, "hex": "#16a34a", "bg": "#dcfce7"},
-    "🟦 Blu — Ridondante / Difensiva": {"codice": "blu", "d_vit": 0, "d_onc": -5, "d_qol": -5, "hex": "#2563eb", "bg": "#dbeafe"},
-    "🟨 Gialla — Trappola Linea Guida": {"codice": "giallo", "d_vit": -10, "d_onc": -15, "d_qol": -25, "hex": "#ca8a04", "bg": "#fef9c3"},
-    "🟥 Rossa — Sbagliata / Pericolosa": {"codice": "rosso", "d_vit": -20, "d_onc": -30, "d_qol": -20, "hex": "#dc2626", "bg": "#fee2e2"},
-}
-MAPPA_COD_LBL = {v["codice"]: k for k, v in COLORI_CLINICI.items()}
-ORDINE_4 = ["verde", "blu", "giallo", "rosso"]
-AMBITI = {"vescica": "🫧 Vescica / Urotelio", "prostata": "🩺 Prostata", "rene": "🫘 Rene / UTUC"}
-KW_VESCICA = ("vescic", "bladder", "nmibc", "mibc", "urotel", "urothel", "utuc", "enfortumab", "pembrolizumab", "avelumab", "durvalumab", "nivolumab", "erdafitinib", "cisplat", "gemcitab", "bcg", "ev-302", "niagara")
-KW_PROSTATA = ("prostat", "mcrpc", "mcspc", "mhspc", "nmcrpc", "apalutamid", "darolutamid", "enzalutamid", "abirateron", "olaparib", "talazoparib", "niraparib", "docetaxel", "cabazitaxel", "relugolix", "radium", "pluvicto", "psma", "peace", "aranote", "arasens", "titan", "embark")
 
+def render_case_builder(case_dir: str = "storycase"):
+    st.markdown("## ✍️ Studio Autoriale 2getSIM · Case Builder v2.0")
+    st.caption("Master su Google Drive · Pubblicazione Real-Time su Supabase · Durata 8-10 snodi (min. 6 se sempre Rosso)")
+    if "builder_v2" not in st.session_state:
+        st.session_state.builder_v2 = template_v2()
+    if "builder_active_node" not in st.session_state:
+        st.session_state.builder_active_node = "snodo1"
 
-def _profondita_minima(dati: Dict[str, Any]) -> Tuple[int, int]:
-    nodi, esiti = dati.get("nodi", {}), set(dati.get("esiti", {}).keys())
-    start = dati.get("nodo_iniziale", "snodo1")
-    if start not in nodi:
-        return 0, 0
-    min_all, min_non_red = 999, 999
+    casi = elenca_casi_drive()
+    labels = ["-- Nuovo Caso (8 snodi) --"] + [f"{'🟢' if c['stato']=='pubblicato' else '🟡'} {c['case_id']} (v{c['versione']}) — {c['titolo'][:30]}" for c in casi]
+    m_id = {labels[i + 1]: casi[i]["case_id"] for i in range(len(casi))}
 
-    def dfs(curr: str, d: int, all_red: bool, vis: set):
-        nonlocal min_all, min_non_red
-        if curr in esiti:
-            min_all = min(min_all, d)
-            if not all_red:
-                min_non_red = min(min_non_red, d)
-            return
-        if curr not in nodi or curr in vis or d > 20:
-            return
-        for o in nodi[curr].get("opzioni", []):
-            if o.get("testo", "").strip():
-                dfs(o.get("next", ""), d + 1, all_red and (o.get("colore") == "rosso"), vis | {curr})
+    c1, c2, c3 = st.columns([2.4, 0.8, 0.8])
+    sel = c1.selectbox("Archivio Drive", labels, label_visibility="collapsed")
+    if c2.button("📂 Carica", use_container_width=True):
+        st.session_state.builder_v2 = template_v2(f"CASO_{len(casi)+1:02d}") if sel.startswith("--") else (carica_caso_drive(m_id[sel]) or template_v2())
+        st.session_state.builder_active_node = st.session_state.builder_v2.get("nodo_iniziale", "snodo1")
+        st.rerun()
+    if c3.button("🆕 Nuovo", use_container_width=True):
+        st.session_state.builder_v2 = template_v2(f"CASO_{len(casi)+1:02d}")
+        st.session_state.builder_active_node = "snodo1"
+        st.rerun()
 
-    dfs(start, 0, True, set())
-    return (0 if min_all == 999 else min_all), (0 if min_non_red == 999 else min_non_red)
+    dati = st.session_state.builder_v2
+    meta = dati["meta"]
 
+    b1, b2, b3, b4 = st.columns([1.8, 1.1, 1.3, 0.9])
+    b1.markdown(f"**`{meta['case_id']}`** · v{meta.get('versione', 1)} · {'🟢 PUBBLICATO' if meta.get('stato')=='pubblicato' else '🟡 BOZZA'}")
+    if b2.button("💾 Salva Bozza", use_container_width=True):
+        if meta.get("case_id") and meta.get("titolo"):
+            st.session_state.builder_v2 = salva_caso_drive(dati)
+            st.success("Bozza salvata su Drive.")
+        else:
+            st.error("Inserisci Codice Caso e Titolo.")
+    if b3.button("🚀 PUBBLICA", type="primary", use_container_width=True):
+        ok_v, avv = valida_v2(dati)
+        if not ok_v:
+            for a in avv:
+                st.error(a)
+        else:
+            with st.spinner("Pubblicazione su Drive e Supabase..."):
+                ok_p, msg_p, d_agg = pubblica_caso_enterprise(dati)
+                st.session_state.builder_v2 = d_agg
+                if ok_p:
+                    try:
+                        os.makedirs(case_dir, exist_ok=True)
+                        t0 = d_agg.get("paziente_t0", {})
+                        leg = {"titolo": meta["titolo"], "sottotitolo": meta.get("sottotitolo", ""), "descrizione_master": meta.get("descrizione_master", ""), "nodo_iniziale": "snodo1", "vitalita_iniziale": t0.get("vitalita_iniziale", 80), "oncologico_iniziale": t0.get("oncologico_iniziale", 55), "qol_iniziale": t0.get("qol_iniziale", 75), "scheda_paziente": t0.get("scheda_paziente", ""), "nodi": d_agg["nodi"], "esiti": d_agg["esiti"]}
+                        with open(os.path.join(case_dir, f"{meta['case_id']}.py"), "w", encoding="utf-8") as f:
+                            f.write(f"CASO = {pprint.pformat(leg, width=100, sort_dicts=False)}\n")
+                    except Exception:
+                        pass
+                    st.success(msg_p)
+                else:
+                    st.error(msg_p)
+    if meta.get("stato") == "pubblicato" and b4.button("⏸️ Bozza", use_container_width=True):
+        _, msg_r, d_agg = ritira_caso_in_bozza(dati)
+        st.session_state.builder_v2 = d_agg
+        st.warning(msg_r)
 
-def _valida_v2(dati: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    err = []
-    meta, t0, nodi = dati.get("meta", {}), dati.get("paziente_t0", {}), dati.get("nodi", {})
-    if not meta.get("case_id") or not meta.get("titolo"):
-        err.append("Mancano Codice Caso o Titolo.")
-    if len(nodi) < 8:
-        err.append(f"Snodi attuali {len(nodi)}: servono almeno 8-10 snodi.")
-    m_all, m_nr = _profondita_minima(dati)
-    if 0 < m_all < 6:
-        err.append(f"Un percorso chiude allo snodo {m_all}: anche sempre Rosso deve durare min. 6 snodi.")
-    if 0 < m_nr < 8:
-        err.append(f"Un percorso non-Rosso chiude allo snodo {m_nr}: deve durare almeno 8-10 snodi.")
-    for sid, sn in nodi.items():
-        opts = [o for o in sn.get("opzioni", []) if o.get("testo", "").strip()]
-        if len(opts) != 4:
-            err.append(f"{sid}: servono 4 opzioni compilate (attuali: {len(opts)}).")
-            continue
-        cols = [o.get("colore", "") for o in opts]
-        if sn.get("is_post_rosso") and not (cols.count("verde") == 0 and cols.count("blu") == 2 and cols.count("giallo") == 1 and cols.count("rosso") == 1):
-            err.append(f"{sid} (post-Rosso): richiesti 0V / 2B / 1G / 1R.")
-        for i, o in enumerate(opts, 1):
-            w = len(o["testo"].split())
-            if w < 2 or w > 7:
-                err.append(f"{sid} opz.{i} ('{o['testo']}'): target 2-6 parole ({w}).")
-    return len(err) == 0, err
+    with st.expander("✨ Genera Caso Completo (8-10 snodi) da Biblioteca PDF Drive", expanded=not bool(meta.get("titolo"))):
+        g1, g2, g3 = st.columns([1.2, 1, 0.8])
+        ncid = g1.text_input("Codice Caso", value=meta["case_id"]).strip().upper()
+        amb = g2.selectbox("Organo", list(AMBITI.keys()), format_func=lambda k: AMBITI[k])
+        nsn = g3.number_input("Snodi (8-10)", 8, 12, 9)
+        spunto = st.text_area("Spunto clinico, comorbidità e mine", height=90)
+        if st.button("🧠 Genera da Biblioteca PDF", type="primary") and ncid and spunto.strip():
+            with st.spinner("Consultazione EAU, ESMO, RCP e Studi su Drive..."):
+                ok_g, res_g = genera_caso_ai(ncid, amb, spunto, int(nsn))
+            if ok_g:
+                st.session_state.builder_v2 = salva_caso_drive(res_g)
+                st.session_state.builder_active_node = "snodo1"
+                st.rerun()
+            else:
+                st.error(res_g)
 
+    t1, t2, t3, t4 = st.tabs(["1️⃣ Paziente T0 & Mine", "2️⃣ Grafo & Snodi", "3️⃣ Esiti", "4️⃣ Fine-Tuning & JSON"])
+    with t1:
+        x1, x2 = st.columns([1, 2])
+        meta["case_id"] = x1.text_input("Codice", value=meta["case_id"], key="m_id").strip().upper()
+        meta["area_clinica"] = x2.selectbox("Area", list(AMBITI.keys()), index=list(AMBITI.keys()).index(meta.get("area_clinica", "vescica")), format_func=lambda k: AMBITI[k], key="m_ar")
+        meta["titolo"] = st.text_input("Titolo", value=meta.get("titolo", ""))
+        meta["sottotitolo"] = st.text_input("Sottotitolo", value=meta.get("sottotitolo", ""))
+        meta["descrizione_master"] = st.text_input("Note Regia", value=meta.get("descrizione_master", ""))
+        t0 = dati.setdefault("paziente_t0", {})
+        cal = t0.setdefault("calibrazione_t0", {})
+        k1, k2, k3 = st.columns(3)
+        t0["vitalita_iniziale"] = k1.slider("❤️ Vitalità T0", 0, 100, int(t0.get("vitalita_iniziale", 80)))
+        cal["vitalita_motivo"] = k1.text_input("Motivo Vit.", value=cal.get("vitalita_motivo", ""))
+        t0["oncologico_iniziale"] = k2.slider("🎯 Oncologico T0", 0, 100, int(t0.get("oncologico_iniziale", 55)))
+        cal["oncologico_motivo"] = k2.text_input("Motivo Onc.", value=cal.get("oncologico_motivo", ""))
+        t0["qol_iniziale"] = k3.slider("🌿 QoL T0", 0, 100, int(t0.get("qol_iniziale", 75)))
+        cal["qol_motivo"] = k3.text_input("Motivo QoL", value=cal.get("qol_motivo", ""))
+        t0["scheda_paziente"] = st.text_area("Cartella Paziente T0", value=t0.get("scheda_paziente", ""), height=120)
+        mine = t0.setdefault("mine_psicologiche", {})
+        m1, m2 = st.columns(2)
+        mine["trappola_urologo"] = m1.text_area("🔪 Mina Urologo", value=mine.get("trappola_urologo", ""), height=70)
+        mine["trappola_oncologo"] = m2.text_area("💉 Mina Oncologo", value=mine.get("trappola_oncologo", ""), height=70)
 
-def _parti_biblio(ambito: str, api_key: str) -> Tuple[List[Dict[str, Any]], List[str]]:
-    parti, nomi = [], []
-    try:
-        for d in elenca_documenti_bibliografia():
-            nl = d["name"].lower()
-            v, p = any(k in nl for k in KW_VESCICA), any(k in nl for k in KW_PROSTATA)
-            if (ambito == "vescica" and not v and p) or (ambito == "prostata" and not p and v):
-                continue
+    with t2:
+        st.graphviz_chart(dot_graphviz(dati), use_container_width=True)
+        lnodi = list(dati["nodi"].keys())
+        if st.session_state.builder_active_node not in lnodi:
+            st.session_state.builder_active_node = lnodi[0]
+        n1, n2, n3 = st.columns([2.6, 0.7, 0.7])
+        sid = n1.selectbox("Snodo", lnodi, index=lnodi.index(st.session_state.builder_active_node), format_func=lambda x: f"{x} — {dati['nodi'][x].get('titolo', '')}")
+        st.session_state.builder_active_node = sid
+        if n2.button("➕ Snodo", use_container_width=True):
+            nid = f"snodo{len(lnodi)+1}"
+            dati["nodi"][nid] = nuovo_snodo(nid)
+            st.session_state.builder_active_node = nid
+            st.rerun()
+        if len(lnodi) > 1 and n3.button("🗑️ Elimina", use_container_width=True):
+            del dati["nodi"][sid]
+            st.session_state.builder_active_node = list(dati["nodi"].keys())[0]
+            st.rerun()
+
+        sn = dati["nodi"][sid]
+        sn["titolo"] = st.text_input("Titolo snodo", value=sn.get("titolo", ""), key=f"t_{sid}")
+        sn["testo"] = st.text_area("Testo snodo", value=sn.get("testo", ""), key=f"x_{sid}", height=80)
+        sn["is_post_rosso"] = st.checkbox("⚠️ Post-errore Rosso (0V / 2B / 1G / 1R)", value=bool(sn.get("is_post_rosso", False)), key=f"pr_{sid}")
+
+        up = st.file_uploader("Allega immagine diagnostica", type=["png", "jpg", "jpeg", "webp"], key=f"u_{sid}")
+        if up and st.button("☁️ Carica su Drive", key=f"su_{sid}"):
+            sn["immagine"] = carica_immagine_drive(up, meta["case_id"], sid)
+            salva_caso_drive(dati)
+            st.success("Immagine collegata.")
+        if sn.get("immagine", "").startswith("drive:"):
             try:
-                uri = carica_file_drive_su_gemini(d["id"], d["name"], d["mimeType"], api_key)
-                parti.append({"file_data": {"mime_type": d["mimeType"], "file_uri": uri}})
-                nomi.append(f"[{d['categoria']}] {d['name']}")
+                st.image(scarica_immagine_drive(sn["immagine"]), width=280)
             except Exception:
                 pass
-    except Exception:
-        pass
-    return parti, nomi
 
+        while len(sn["opzioni"]) < 4:
+            c = ORDINE_4[len(sn["opzioni"])]
+            cfg = COLORI_CLINICI[MAPPA_COD_LBL[c]]
+            sn["opzioni"].append({"testo": "", "colore": c, "d_vit": cfg["d_vit"], "d_onc": cfg["d_onc"], "d_qol": cfg["d_qol"], "effetto_ritardato": False, "razionale": "", "next": "esito_parziale"})
 
-def _gemini_json(parti: List[Dict[str, Any]], api_key: str, temp: float = 0.3) -> Tuple[bool, Any]:
-    payload = {"contents": [{"parts": parti}], "generationConfig": {"temperature": temp, "responseMimeType": "application/json"}}
-    last_err = ""
-    for mod in ("gemini-2.5-pro", "gemini-2.5-flash"):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{mod}:generateContent?key={api_key}"
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "x-goog-api-key": api_key}, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=150) as resp:
-                txt = json.loads(resp.read().decode("utf-8"))["candidates"][0]["content"]["parts"][0]["text"].strip()
-                if txt.startswith("```"):
-                    txt = txt.strip("`").strip()
-                    if txt.lower().startswith("json"):
-                        txt = txt[4:].strip()
-                return True, json.loads(txt)
-        except urllib.error.HTTPError as e:
-            last_err = f"Errore Gemini ({e.code}): {e.read().decode('utf-8', errors='ignore')[:180]}"
-            if e.code != 404:
-                break
-        except Exception as e:
-            last_err = f"Errore Gemini: {e}"
-            break
-    return False, last_err
+        dests = [n for n in lnodi if n != sid] + list(dati["esiti"].keys())
+        for i in range(4):
+            o = sn["opzioni"][i]
+            lbl = MAPPA_COD_LBL.get(o.get("colore", ORDINE_4[i]), MAPPA_COD_LBL["blu"])
+            ic = COLORI_CLINICI[lbl]
+            st.markdown(f"<div style='border-left:5px solid {ic['hex']};background:{ic['bg']};padding:4px 10px;border-radius:4px;margin-top:8px;color:#0f172a'><b>Opz. {i+1}</b> · {lbl}</div>", unsafe_allow_html=True)
+            ct, cc, cn = st.columns([2.2, 1.3, 1.3])
+            old = o.get("testo", "")
+            o["testo"] = ct.text_input("Comando", value=old, key=f"ot_{sid}_{i}", label_visibility="collapsed")
+            if o["testo"] != old and old.strip():
+                why = st.text_input(f"💡 Perché hai cambiato '{old}' → '{o['testo']}'?", key=f"w_{sid}_{i}")
+                if why:
+                    dati.setdefault("changelog_finetuning", []).append({"ts": datetime.now(timezone.utc).isoformat(), "snodo": sid, "prima": old, "dopo": o["testo"], "perche": why})
+            slbl = cc.selectbox("Col", list(COLORI_CLINICI.keys()), index=list(COLORI_CLINICI.keys()).index(lbl), key=f"oc_{sid}_{i}", label_visibility="collapsed")
+            o["colore"] = COLORI_CLINICI[slbl]["codice"]
+            curr_n = o.get("next") if o.get("next") in dests else dests[0]
+            o["next"] = cn.selectbox("Next", dests, index=dests.index(curr_n), key=f"on_{sid}_{i}", label_visibility="collapsed")
+            d1, d2, d3, d4, d5 = st.columns([0.7, 0.7, 0.7, 1.0, 2.5])
+            o["d_vit"] = d1.number_input("ΔVit", value=int(o.get("d_vit", 0)), key=f"dv_{sid}_{i}")
+            o["d_onc"] = d2.number_input("ΔOnc", value=int(o.get("d_onc", 0)), key=f"do_{sid}_{i}")
+            o["d_qol"] = d3.number_input("ΔQoL", value=int(o.get("d_qol", 0)), key=f"dq_{sid}_{i}")
+            o["effetto_ritardato"] = d4.checkbox("Ritardato", value=bool(o.get("effetto_ritardato", False)), key=f"er_{sid}_{i}")
+            o["razionale"] = d5.text_input("Razionale", value=o.get("razionale", ""), key=f"rz_{sid}_{i}")
+            if i == 0 and st.button("✨ Genera Blu/Gialla/Rossa snodo", key=f"ai_{sid}") and o["testo"].strip():
+                ok_s, rs = genera_3_opzioni_snodo(dati, sid, o["testo"].strip())
+                if ok_s:
+                    for j, ck in enumerate(("blu", "gialla", "rossa"), 1):
+                        sn["opzioni"][j]["testo"], sn["opzioni"][j]["razionale"] = rs[ck]["testo"], rs[ck].get("razionale", "")
+                    st.rerun()
+                else:
+                    st.error(rs)
 
+    with t3:
+        for eid, es in dati.get("esiti", {}).items():
+            es["titolo"] = st.text_input(f"Titolo {eid}", value=es.get("titolo", ""), key=f"et_{eid}")
+            es["descrizione"] = st.text_area(f"Descrizione {eid}", value=es.get("descrizione", ""), key=f"ed_{eid}", height=68)
+            es["debriefing_master"] = st.text_area(f"Debriefing Master {eid}", value=es.get("debriefing_master", ""), key=f"eb_{eid}", height=68)
 
-def _genera_caso_ai(cid: str, ambito: str, spunto: str, n_snodi: int = 9) -> Tuple[bool, Any]:
-    api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        return False, "Manca GEMINI_API_KEY nei Secrets."
-    parti_b, nomi = _parti_biblio(ambito, api_key)
-    fonti = ", ".join(nomi) if nomi else "Linee Guida EAU/ESMO"
-    prompt = (
-        f"Direttore Scientifico 2getSIM. Genera JSON v2.0 da Biblioteca PDF ({fonti}).\n"
-        f"case_id='{cid}', area_clinica='{ambito}', snodi longitudinali={n_snodi} (min 8, max 10). Spunto: {spunto}\n"
-        "REGOLE INDEROGABILI:\n"
-        f"1. DURATA: percorsi verde/blu/giallo DEVONO durare 8-10 snodi (snodo1..snodo{n_snodi}); NESSUN esito_* prima di snodo8. Anche scegliendo sempre rosso, passaggio su snodi is_post_rosso=true e chiusura esito_sconfitta solo dal 6° snodo in poi.\n"
-        "2. T0 (30enne sano=100/100/100): sottrai punti reali per età/eGFR/comorbidità/carico e documenta in calibrazione_t0.\n"
-        "3. MINE PSICOLOGICHE: trappola_urologo e trappola_oncologo; opzioni giallo e blu con effetto_ritardato=true.\n"
-        "4. OPZIONI: 4 per snodo (verde,blu,giallo,rosso), comando operativo secco 2-6 parole, zero parentesi, con razionale.\n"
-        "5. POST-ROSSO (is_post_rosso=true): 0 verde, 2 blu, 1 giallo, 1 rosso.\n"
-        'Schema JSON esatto: {"schema_version":"2.0","meta":{"case_id":"","area_clinica":"","stato":"bozza","versione":1,"titolo":"","sottotitolo":"","descrizione_master":"","audit_clinico":""},'
-        '"paziente_t0":{"vitalita_iniziale":80,"oncologico_iniziale":55,"qol_iniziale":75,"calibrazione_t0":{"vitalita_motivo":"","oncologico_motivo":"","qol_motivo":""},"scheda_paziente":"","mine_psicologiche":{"trappola_urologo":"","trappola_oncologo":""}},'
-        '"nodo_iniziale":"snodo1","nodi":{"snodo1":{"titolo":"","testo":"","is_post_rosso":false,"opzioni":[{"testo":"2-6 parole","colore":"verde","d_vit":5,"d_onc":15,"d_qol":5,"effetto_ritardato":false,"razionale":"","next":"snodo2"}]}},'
-        '"esiti":{"esito_vittoria":{"tipo":"bianco","titolo":"ESITO OTTIMALE","descrizione":"","debriefing_master":""},"esito_parziale":{"tipo":"giallo","titolo":"ESITO INTERMEDIO","descrizione":"","debriefing_master":""},"esito_sconfitta":{"tipo":"rosso","titolo":"ESITO CRITICO","descrizione":"","debriefing_master":""}}}'
-    )
-    ok, res = _gemini
+    with t4:
+        st.json(dati.get("changelog_finetuning", []))
+        st.json(dati)
