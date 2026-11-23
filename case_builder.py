@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 import streamlit as st
 from case_builder_engine import (
     AMBITI, COLORI_CLINICI, MAPPA_COD_LBL, ORDINE_4, dot_graphviz,
-    genera_3_opzioni_snodo, genera_caso_ai, nuovo_snodo, template_v2, valida_v2,
+    genera_3_opzioni_snodo, genera_caso_ai, normalizza_json_importato,
+    nuovo_snodo, template_v2, valida_v2,
 )
 from google_db import (
     carica_caso_drive, carica_immagine_drive, elenca_casi_drive,
@@ -34,9 +35,62 @@ def render_case_builder(case_dir: str = "storycase"):
         st.session_state.builder_active_node = "snodo1"
         st.rerun()
 
+    st.divider()
+    st.markdown("### 1. Scegli la modalità di creazione iniziale")
+    modalita_input = st.radio(
+        "Modalità di avvio caso clinico:",
+        [
+            "📋 Importa JSON (generato su Gemini Chat — Gratuito)",
+            "🧠 Genera con AI Studio (Testo libero + PDF / Word / Biblioteca Drive)",
+        ],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    if modalita_input.startswith("📋"):
+        with st.container(border=True):
+            st.caption("Incolla qui il JSON generato dalla tua chat Gemini: verrà caricato nell'editor sottostante per qualsiasi modifica e salvataggio su Drive/Supabase.")
+            raw_json = st.text_area("Codice JSON v2.0:", height=140, placeholder='{"schema_version": "2.0", "meta": ...}', key="import_json_box")
+            if st.button("⬆️ Carica JSON nell'Editor e Salva Bozza su Drive", type="primary"):
+                if not raw_json.strip():
+                    st.warning("Incolla prima il codice JSON.")
+                else:
+                    ok_j, res_j = normalizza_json_importato(raw_json)
+                    if ok_j:
+                        st.session_state.builder_v2 = salva_caso_drive(res_j)
+                        st.session_state.builder_active_node = st.session_state.builder_v2.get("nodo_iniziale", "snodo1")
+                        st.success(f"✅ Caso `{res_j['meta']['case_id']}` importato e salvato in Bozza su Drive! Modificalo qui sotto o premi PUBBLICA.")
+                        st.rerun()
+                    else:
+                        st.error(res_j)
+    else:
+        with st.container(border=True):
+            g1, g2, g3 = st.columns([1.2, 1, 0.8])
+            ncid = g1.text_input("Codice Caso", value=st.session_state.builder_v2["meta"]["case_id"]).strip().upper()
+            amb = g2.selectbox("Organo", list(AMBITI.keys()), format_func=lambda k: AMBITI[k])
+            nsn = g3.number_input("Snodi (8-10)", 8, 12, 9)
+            spunto = st.text_area("Testo libero (caso reale, referto, comorbidità, trappole da inserire):", height=95)
+            f1, f2 = st.columns([2.2, 1])
+            files_loc = f1.file_uploader("Allega file extra (PDF, Word .docx, TXT — opzionale):", type=["pdf", "docx", "txt", "md"], accept_multiple_files=True)
+            usa_biblio = f2.checkbox("Includi anche Biblioteca PDF Drive", value=True)
+            if st.button("🧠 Genera Caso Clinico con AI Studio", type="primary"):
+                if not ncid or (not spunto.strip() and not files_loc):
+                    st.warning("Inserisci il Codice Caso e almeno un testo libero o un file allegato.")
+                else:
+                    with st.spinner("Analisi testi/allegati e generazione albero clinico 8-10 snodi..."):
+                        ok_g, res_g = genera_caso_ai(ncid, amb, spunto, int(nsn), files_loc, usa_biblio)
+                    if ok_g:
+                        st.session_state.builder_v2 = salva_caso_drive(res_g)
+                        st.session_state.builder_active_node = "snodo1"
+                        st.success("✅ Caso generato e salvato in Bozza su Drive! Rifiniscilo qui sotto o premi PUBBLICA.")
+                        st.rerun()
+                    else:
+                        st.error(res_g)
+
     dati = st.session_state.builder_v2
     meta = dati["meta"]
 
+    st.divider()
     b1, b2, b3, b4 = st.columns([1.8, 1.1, 1.3, 0.9])
     b1.markdown(f"**`{meta['case_id']}`** · v{meta.get('versione', 1)} · {'🟢 PUBBLICATO' if meta.get('stato')=='pubblicato' else '🟡 BOZZA'}")
     if b2.button("💾 Salva Bozza", use_container_width=True):
@@ -70,22 +124,6 @@ def render_case_builder(case_dir: str = "storycase"):
         _, msg_r, d_agg = ritira_caso_in_bozza(dati)
         st.session_state.builder_v2 = d_agg
         st.warning(msg_r)
-
-    with st.expander("✨ Genera Caso Completo (8-10 snodi) da Biblioteca PDF Drive", expanded=not bool(meta.get("titolo"))):
-        g1, g2, g3 = st.columns([1.2, 1, 0.8])
-        ncid = g1.text_input("Codice Caso", value=meta["case_id"]).strip().upper()
-        amb = g2.selectbox("Organo", list(AMBITI.keys()), format_func=lambda k: AMBITI[k])
-        nsn = g3.number_input("Snodi (8-10)", 8, 12, 9)
-        spunto = st.text_area("Spunto clinico, comorbidità e mine", height=90)
-        if st.button("🧠 Genera da Biblioteca PDF", type="primary") and ncid and spunto.strip():
-            with st.spinner("Consultazione EAU, ESMO, RCP e Studi su Drive..."):
-                ok_g, res_g = genera_caso_ai(ncid, amb, spunto, int(nsn))
-            if ok_g:
-                st.session_state.builder_v2 = salva_caso_drive(res_g)
-                st.session_state.builder_active_node = "snodo1"
-                st.rerun()
-            else:
-                st.error(res_g)
 
     t1, t2, t3, t4 = st.tabs(["1️⃣ Paziente T0 & Mine", "2️⃣ Grafo & Snodi", "3️⃣ Esiti", "4️⃣ Fine-Tuning & JSON"])
     with t1:
