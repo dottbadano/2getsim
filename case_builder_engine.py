@@ -1,4 +1,5 @@
-import json, urllib.error, urllib.request
+import base64, io, json, urllib.error, urllib.request, zipfile
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 import streamlit as st
@@ -68,6 +69,60 @@ def valida_v2(dati: Dict[str, Any]) -> Tuple[bool, List[str]]:
     return len(err) == 0, err
 
 
+def normalizza_json_importato(raw_text: str) -> Tuple[bool, Any]:
+    try:
+        t = raw_text.strip()
+        if t.startswith("```"):
+            t = t.strip("`").strip()
+            if t.lower().startswith("json"):
+                t = t[4:].strip()
+        dati = json.loads(t)
+        if not isinstance(dati, dict) or "nodi" not in dati or not isinstance(dati["nodi"], dict):
+            return False, "Il JSON deve contenere la chiave 'nodi'."
+        now = datetime.now(timezone.utc).isoformat()
+        dati["schema_version"] = "2.0"
+        meta = dati.setdefault("meta", {})
+        meta.setdefault("case_id", "CASO_IMPORTATO")
+        meta.setdefault("area_clinica", "vescica")
+        meta["stato"] = "bozza"
+        meta.setdefault("versione", 1)
+        meta.setdefault("created_at", now)
+        meta["updated_at"] = now
+        dati.setdefault("nodo_iniziale", list(dati["nodi"].keys())[0])
+        dati.setdefault("paziente_t0", {"vitalita_iniziale": 80, "oncologico_iniziale": 55, "qol_iniziale": 75, "scheda_paziente": ""})
+        dati.setdefault("esiti", {
+            "esito_vittoria": {"tipo": "bianco", "titolo": "ESITO OTTIMALE", "descrizione": "", "debriefing_master": ""},
+            "esito_parziale": {"tipo": "giallo", "titolo": "ESITO INTERMEDIO", "descrizione": "", "debriefing_master": ""},
+            "esito_sconfitta": {"tipo": "rosso", "titolo": "ESITO CRITICO", "descrizione": "", "debriefing_master": ""},
+        })
+        dati.setdefault("changelog_finetuning", [])
+        return True, dati
+    except Exception as e:
+        return False, f"Errore lettura JSON: {e}"
+
+
+def _estrai_allegati_locali(files: List[Any]) -> Tuple[List[Dict[str, Any]], str]:
+    parti_bin, testi = [], []
+    for f in files or []:
+        nome = f.name.lower()
+        raw = f.getvalue()
+        if nome.endswith(".pdf"):
+            parti_bin.append({"inline_data": {"mime_type": "application/pdf", "data": base64.b64encode(raw).decode("utf-8")}})
+            testi.append(f"[Allegato PDF: {f.name}]")
+        elif nome.endswith(".docx"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                    xml_data = z.read("word/document.xml")
+                root = ET.fromstring(xml_data)
+                txt = " ".join(el.text for el in root.iter() if el.text)
+                testi.append(f"--- CONTENUTO WORD ({f.name}) ---\n{txt[:25000]}")
+            except Exception:
+                pass
+        elif nome.endswith(".txt") or nome.endswith(".md"):
+            testi.append(f"--- CONTENUTO TESTO ({f.name}) ---\n{raw.decode('utf-8', errors='ignore')[:25000]}")
+    return parti_bin, "\n\n".join(testi)
+
+
 def parti_biblio(ambito: str, api_key: str) -> Tuple[List[Dict[str, Any]], List[str]]:
     parti, nomi = [], []
     try:
@@ -90,17 +145,13 @@ def parti_biblio(ambito: str, api_key: str) -> Tuple[List[Dict[str, Any]], List[
 def gemini_json(parti: List[Dict[str, Any]], api_key: str, temp: float = 0.3) -> Tuple[bool, Any]:
     payload = {"contents": [{"parts": parti}], "generationConfig": {"temperature": temp, "responseMimeType": "application/json"}}
     last_err = ""
-    for mod in ("gemini-2.5-pro", "gemini-2.5-flash"):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{mod}:generateContent?key={api_key}"
+    for mod in ("gemini-2.5-flash", "gemini-2.5-pro"):
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){mod}:generateContent?key={api_key}"
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "x-goog-api-key": api_key}, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=150) as resp:
                 txt = json.loads(resp.read().decode("utf-8"))["candidates"][0]["content"]["parts"][0]["text"].strip()
-                if txt.startswith("```"):
-                    txt = txt.strip("`").strip()
-                    if txt.lower().startswith("json"):
-                        txt = txt[4:].strip()
-                return True, json.loads(txt)
+                return normalizza_json_importato(txt)
         except urllib.error.HTTPError as e:
             last_err = f"Errore Gemini ({e.code}): {e.read().decode('utf-8', errors='ignore')[:180]}"
             if e.code != 404:
@@ -111,15 +162,17 @@ def gemini_json(parti: List[Dict[str, Any]], api_key: str, temp: float = 0.3) ->
     return False, last_err
 
 
-def genera_caso_ai(cid: str, ambito: str, spunto: str, n_snodi: int = 9) -> Tuple[bool, Any]:
+def genera_caso_ai(cid: str, ambito: str, spunto: str, n_snodi: int = 9, allegati_locali: List[Any] = None, usa_biblio_drive: bool = True) -> Tuple[bool, Any]:
     api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         return False, "Manca GEMINI_API_KEY nei Secrets."
-    parti_b, nomi = parti_biblio(ambito, api_key)
-    fonti = ", ".join(nomi) if nomi else "Linee Guida EAU/ESMO"
+    parti_b, nomi = parti_biblio(ambito, api_key) if usa_biblio_drive else ([], [])
+    parti_loc, testi_loc = _estrai_allegati_locali(allegati_locali or [])
+    fonti = ", ".join(nomi) if nomi else "Documenti allegati / Linee Guida EAU-ESMO"
     prompt = (
-        f"Direttore Scientifico 2getSIM. Genera JSON v2.0 da Biblioteca PDF ({fonti}).\n"
-        f"case_id='{cid}', area_clinica='{ambito}', snodi longitudinali={n_snodi} (min 8, max 10). Spunto: {spunto}\n"
+        f"Direttore Scientifico 2getSIM. Genera JSON v2.0 da Fonti ({fonti}).\n"
+        f"case_id='{cid}', area_clinica='{ambito}', snodi longitudinali={n_snodi} (min 8, max 10).\n"
+        f"TESTO / SPUNTO CLINICO:\n{spunto}\n{testi_loc}\n"
         "REGOLE INDEROGABILI:\n"
         f"1. DURATA: percorsi verde/blu/giallo DEVONO durare 8-10 snodi (snodo1..snodo{n_snodi}); NESSUN esito_* prima di snodo8. Anche scegliendo sempre rosso, passaggio su snodi is_post_rosso=true e chiusura esito_sconfitta solo dal 6° snodo in poi.\n"
         "2. T0 (30enne sano=100/100/100): sottrai punti reali per età/eGFR/comorbidità/carico e documenta in calibrazione_t0.\n"
@@ -131,13 +184,11 @@ def genera_caso_ai(cid: str, ambito: str, spunto: str, n_snodi: int = 9) -> Tupl
         '"nodo_iniziale":"snodo1","nodi":{"snodo1":{"titolo":"","testo":"","is_post_rosso":false,"opzioni":[{"testo":"2-6 parole","colore":"verde","d_vit":5,"d_onc":15,"d_qol":5,"effetto_ritardato":false,"razionale":"","next":"snodo2"}]}},'
         '"esiti":{"esito_vittoria":{"tipo":"bianco","titolo":"ESITO OTTIMALE","descrizione":"","debriefing_master":""},"esito_parziale":{"tipo":"giallo","titolo":"ESITO INTERMEDIO","descrizione":"","debriefing_master":""},"esito_sconfitta":{"tipo":"rosso","titolo":"ESITO CRITICO","descrizione":"","debriefing_master":""}}}'
     )
-    ok, res = gemini_json([*parti_b, {"text": prompt}], api_key, 0.35)
+    ok, res = gemini_json([*parti_b, *parti_loc, {"text": prompt}], api_key, 0.35)
     if not ok:
         return False, res
-    now = datetime.now(timezone.utc).isoformat()
-    res["schema_version"] = "2.0"
-    res.setdefault("meta", {}).update({"case_id": cid, "area_clinica": ambito, "stato": "bozza", "versione": 1, "created_at": now, "updated_at": now})
-    res.setdefault("changelog_finetuning", [])
+    res["meta"]["case_id"] = cid
+    res["meta"]["area_clinica"] = ambito
     return True, res
 
 
@@ -152,10 +203,20 @@ def genera_3_opzioni_snodo(dati: Dict[str, Any], sid: str, verde: str) -> Tuple[
         f"Snodo ({sn.get('titolo', '')}): {sn.get('testo', '')}\nOpzione VERDE: '{verde}'\n"
         'Genera 3 alternative (blu, gialla, rossa) di 2-6 parole ciascuna + razionale EAU/ESMO/RCP. Rispondi SOLO JSON: {"blu":{"testo":"","razionale":""},"gialla":{"testo":"","razionale":""},"rossa":{"testo":"","razionale":""}}'
     )
-    ok, res = gemini_json([*parti_b, {"text": prompt}], api_key, 0.3)
-    if ok and all(k in res and "testo" in res[k] for k in ("blu", "gialla", "rossa")):
-        return True, res
-    return False, res if not ok else "Risposta AI incompleta."
+    payload = {"contents": [{"parts": [*parti_b, {"text": prompt}]}], "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json"}}
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=){api_key}"
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "x-goog-api-key": api_key}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            txt = json.loads(resp.read().decode("utf-8"))["candidates"][0]["content"]["parts"][0]["text"].strip().strip("`")
+            if txt.lower().startswith("json"):
+                txt = txt[4:].strip()
+            res = json.loads(txt)
+            if all(k in res and "testo" in res[k] for k in ("blu", "gialla", "rossa")):
+                return True, res
+    except Exception as e:
+        return False, f"Errore Gemini: {e}"
+    return False, "Risposta AI incompleta."
 
 
 def dot_graphviz(dati: Dict[str, Any]) -> str:
