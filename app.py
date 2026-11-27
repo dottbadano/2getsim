@@ -7,11 +7,7 @@ from motore import (
     caso_esempio_v2,
 )
 
-st.set_page_config(
-    page_title="2getSIM Studio · Generatore & Sandbox",
-    page_icon="❤️",
-    layout="wide",
-)
+st.set_page_config(page_title="2getSIM Studio", page_icon="❤️", layout="wide")
 
 
 def clamp(val: int) -> int:
@@ -20,12 +16,12 @@ def clamp(val: int) -> int:
 
 def stile_semaforo(val: int):
     if val >= 80:
-        return "Ottimale", "#10b981", "rgba(16, 185, 129, 0.16)"
+        return "OTTIMALE", "#10b981", "rgba(16, 185, 129, 0.16)"
     if val >= 60:
-        return "Discreto", "#0ea5e9", "rgba(14, 165, 233, 0.16)"
+        return "DISCRETO", "#0ea5e9", "rgba(14, 165, 233, 0.16)"
     if val >= 40:
-        return "In Calo", "#f59e0b", "rgba(245, 158, 11, 0.16)"
-    return "Critico", "#ef4444", "rgba(239, 68, 68, 0.24)"
+        return "IN CALO", "#f59e0b", "rgba(245, 158, 11, 0.16)"
+    return "CRITICO", "#ef4444", "rgba(239, 68, 68, 0.24)"
 
 
 def init_stato(caso: dict):
@@ -38,7 +34,6 @@ def init_stato(caso: dict):
     st.session_state["coda_ritardati"] = []
     st.session_state["storico"] = []
     st.session_state["esito_key"] = None
-    st.session_state["scelta_temp"] = None
 
 
 if "caso_attivo" not in st.session_state:
@@ -46,10 +41,9 @@ if "caso_attivo" not in st.session_state:
 
 caso = st.session_state["caso_attivo"]
 
-# --- SIDEBAR: IMPORTAZIONE, EXPORT & DRIVE ---
 with st.sidebar:
     st.markdown("## 🔴 **2**getSIM Studio")
-    st.caption("Validatore, Sandbox & Export per 2getSIM Enterprise")
+    st.caption("Validatore, Sandbox & Export JSON v2.0")
 
     file_caricato = st.file_uploader("Carica file .json", type=["json"])
     if file_caricato is not None:
@@ -61,15 +55,15 @@ with st.sidebar:
             init_stato(parsed)
             st.success("JSON caricato e normalizzato.")
 
-    with st.expander("Incolla JSON da Peppiniello / Gemini", expanded=False):
-        raw_input = st.text_area("Incolla qui il JSON completo:", height=180)
+    with st.expander("Incolla JSON da Peppiniello", expanded=False):
+        raw_input = st.text_area("Incolla qui il JSON:", height=160)
         if st.button("Carica JSON incollato", use_container_width=True):
             parsed, err = normalizza_json(raw_input)
             if err:
                 st.error(err)
             else:
                 init_stato(parsed)
-                st.success("Caso caricato con successo!")
+                st.success("Caso caricato!")
                 st.rerun()
 
     st.divider()
@@ -92,11 +86,10 @@ with st.sidebar:
         else:
             st.warning(msg)
 
-    if st.button("🔄 Riavvia Simulazione da T0", use_container_width=True):
+    if st.button("🔄 Riavvia da T0", use_container_width=True):
         init_stato(caso)
         st.rerun()
 
-# --- MONITOR PARAMETRI (CUORE TACHICARDICO + SCUDO/QOL COLORATI SENZA BARRE) ---
 vit = st.session_state["vitalita"]
 onc = st.session_state["oncologico"]
 qol = st.session_state["qol"]
@@ -104,7 +97,6 @@ qol = st.session_state["qol"]
 vit_clamp = max(20, min(100, vit))
 beat_sec = round(0.33 + ((vit_clamp - 20) / 80) * 1.67, 2)
 stato_cuore = "TACHICARDIA" if vit <= 45 else "RITMO"
-
 onc_nome, onc_hex, onc_bg = stile_semaforo(onc)
 qol_nome, qol_hex, qol_bg = stile_semaforo(qol)
 
@@ -119,35 +111,16 @@ st.markdown(
         70% {{ transform: scale(1); filter: brightness(1); }}
     }}
     .monitor-bar {{
-        background: #0A0A0A;
-        color: #FFFFFF;
-        border-radius: 16px;
-        padding: 14px 22px;
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 16px;
-        margin-bottom: 14px;
-        border: 1px solid #262626;
+        background: #0A0A0A; color: #FFFFFF; border-radius: 16px;
+        padding: 14px 22px; display: grid; grid-template-columns: repeat(3, 1fr);
+        gap: 16px; margin-bottom: 14px; border: 1px solid #262626;
     }}
-    .metric-box {{
-        display: flex;
-        align-items: center;
-        gap: 14px;
-    }}
+    .metric-box {{ display: flex; align-items: center; gap: 14px; }}
     .icon-badge {{
-        width: 48px;
-        height: 48px;
-        border-radius: 14px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 24px;
-        font-weight: bold;
+        width: 48px; height: 48px; border-radius: 14px;
+        display: flex; align-items: center; justify-content: center; font-size: 24px;
     }}
-    .heart-anim {{
-        display: inline-block;
-        animation: cardiacPulse {beat_sec}s infinite ease-in-out;
-    }}
+    .heart-anim {{ display: inline-block; animation: cardiacPulse {beat_sec}s infinite ease-in-out; }}
     </style>
     <div class="monitor-bar">
         <div class="metric-box">
@@ -155,7 +128,7 @@ st.markdown(
                 <span class="heart-anim">❤️</span>
             </div>
             <div>
-                <div style="font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #d4d4d4;">VITALITÀ</div>
+                <div style="font-size: 11px; font-weight: 800; color: #d4d4d4;">VITALITÀ</div>
                 <div style="font-size: 12px; font-weight: 800; color: #f87171;">{stato_cuore}</div>
             </div>
         </div>
@@ -164,8 +137,8 @@ st.markdown(
                 <span>🛡️</span>
             </div>
             <div>
-                <div style="font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #d4d4d4;">ONCOLOGICO</div>
-                <div style="font-size: 12px; font-weight: 800; color: {onc_hex};">{onc_nome.upper()}</div>
+                <div style="font-size: 11px; font-weight: 800; color: #d4d4d4;">ONCOLOGICO</div>
+                <div style="font-size: 12px; font-weight: 800; color: {onc_hex};">{onc_nome}</div>
             </div>
         </div>
         <div class="metric-box">
@@ -173,8 +146,8 @@ st.markdown(
                 <span>✨</span>
             </div>
             <div>
-                <div style="font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #d4d4d4;">QUALITÀ VITA</div>
-                <div style="font-size: 12px; font-weight: 800; color: {qol_hex};">{qol_nome.upper()}</div>
+                <div style="font-size: 11px; font-weight: 800; color: #d4d4d4;">QUALITÀ VITA</div>
+                <div style="font-size: 12px; font-weight: 800; color: {qol_hex};">{qol_nome}</div>
             </div>
         </div>
     </div>
@@ -182,11 +155,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --- TABS PRINCIPALI ---
 tab_sim, tab_val, tab_edit = st.tabs([
-    "🎯 Simulatore Sandbox (Test Caso)",
+    "🎯 Simulatore Sandbox",
     "✅ Controllo Regole Peppiniello",
-    "✏️ Editor Rapido Snodi & T0",
+    "✏️ Editor T0",
 ])
 
 with tab_sim:
@@ -195,9 +167,9 @@ with tab_sim:
     with col_anamnesi:
         st.markdown("### 📋 Anamnesi & Quadro T0")
         st.info(caso.get("paziente_t0", {}).get("scheda_paziente", ""))
-        mostra_razionali = st.toggle("Mostra colori e razionali (Modalità Master)", value=False)
+        mostra_razionali = st.toggle("Modalità Master (colori e razionali)", value=False)
         if mostra_razionali:
-            st.caption(f"Valori interni: Vitalità {vit}% · Oncologico {onc}% · QoL {qol}%")
+            st.caption(f"Vitalità: {vit}% · Oncologico: {onc}% · QoL: {qol}%")
 
     with col_arena:
         esito_key = st.session_state["esito_key"]
@@ -206,16 +178,16 @@ with tab_sim:
 
         if not esito_key and nodo:
             passo_num = len(st.session_state["storico"]) + 1
-            st.markdown(f"#### SNODO {passo_num} — {nodo.get('titolo', nodo_id)}")
+            st.markdown(f"#### SNODO {passo_num} - {nodo.get('titolo', nodo_id)}")
             st.markdown(f"**{nodo.get('testo', '')}**")
 
             opzioni = nodo.get("opzioni", [])
             lettere = ["A", "B", "C", "D"]
             etichette = []
             for idx, op in enumerate(opzioni):
-                lbl = f"{lettere[idx] if idx < 4 else idx+1}) {op.get('testo', '')}"
+                lbl = f"{lettere[idx] if idx < 4 else idx + 1}) {op.get('testo', '')}"
                 if mostra_razionali:
-                    lbl += f"  [{op.get('colore', '').upper()}]"
+                    lbl += f" [{op.get('colore', '').upper()}]"
                 etichette.append(lbl)
 
             scelta_idx = st.radio(
@@ -229,13 +201,103 @@ with tab_sim:
             if scelta_idx is not None and mostra_razionali:
                 st.caption(f"Razionale: {opzioni[scelta_idx].get('razionale', '')}")
 
-            if st.button(
-                "Conferma e Procedi ➡️",
-                disabled=(scelta_idx is None),
-                type="primary",
-            ):
+            if st.button("Conferma e Procedi ➡️", disabled=(scelta_idx is None), type="primary"):
                 opz = opzioni[scelta_idx]
                 rit = bool(opz.get("effetto_ritardato", False))
-                nuova_vit = vit + (0 if rit else int(opz.get("d_vit", 0)))
-                nuovo_onc = onc + (0 if rit else int(opz.get("d_onc", 0)))
-                nuova_qol = qol + (0 if rit else int(opz.get("d
+                d_v = 0 if rit else int(opz.get("d_vit", 0))
+                d_o = 0 if rit else int(opz.get("d_onc", 0))
+                d_q = 0 if rit else int(opz.get("d_qol", 0))
+
+                nuova_vit = vit + d_v
+                nuovo_onc = onc + d_o
+                nuova_qol = qol + d_q
+
+                nuova_coda = []
+                for item in st.session_state["coda_ritardati"]:
+                    if item["scatta"] <= passo_num:
+                        nuova_vit += item["d_vit"]
+                        nuovo_onc += item["d_onc"]
+                        nuova_qol += item["d_qol"]
+                    else:
+                        nuova_coda.append(item)
+
+                if rit:
+                    nuova_coda.append({
+                        "scatta": passo_num + 2,
+                        "d_vit": int(opz.get("d_vit", 0)),
+                        "d_onc": int(opz.get("d_onc", 0)),
+                        "d_qol": int(opz.get("d_qol", 0)),
+                    })
+
+                nuova_vit = clamp(nuova_vit)
+                nuovo_onc = clamp(nuovo_onc)
+                nuova_qol = clamp(nuova_qol)
+
+                st.session_state["vitalita"] = nuova_vit
+                st.session_state["oncologico"] = nuovo_onc
+                st.session_state["qol"] = nuova_qol
+                st.session_state["coda_ritardati"] = nuova_coda
+                st.session_state["storico"].append({
+                    "snodo": nodo_id,
+                    "scelta": opz.get("testo", ""),
+                    "colore": opz.get("colore", ""),
+                    "razionale": opz.get("razionale", ""),
+                })
+
+                nxt = opz.get("next", "")
+                fine = None
+                if nuova_vit <= 10 or nuovo_onc <= 10:
+                    fine = "esito_sconfitta"
+                elif nxt.startswith("esito_"):
+                    if nxt == "esito_vittoria" and (nuova_vit < 60 or nuovo_onc < 65 or nuova_qol < 55):
+                        fine = "esito_parziale"
+                    else:
+                        fine = nxt
+                elif nxt not in caso.get("nodi", {}):
+                    fine = "esito_vittoria" if (nuova_vit >= 65 and nuovo_onc >= 65) else "esito_parziale"
+
+                if fine:
+                    st.session_state["esito_key"] = fine
+                else:
+                    st.session_state["nodo_corrente"] = nxt
+                st.rerun()
+
+        elif esito_key:
+            esito_obj = caso.get("esiti", {}).get(esito_key, {})
+            st.subheader(f"🏁 {esito_obj.get('titolo', esito_key)}")
+            st.write(esito_obj.get("descrizione", ""))
+            st.success(f"**Debriefing Master:** {esito_obj.get('debriefing_master', '')}")
+
+            mine = caso.get("paziente_t0", {}).get("mine_psicologiche", {})
+            if mine:
+                c1, c2 = st.columns(2)
+                c1.warning(f"**Trappola Urologo:** {mine.get('trappola_urologo', '')}")
+                c2.warning(f"**Trappola Oncologo:** {mine.get('trappola_oncologo', '')}")
+
+            st.markdown("#### Riepilogo Scelte")
+            for idx, s in enumerate(st.session_state["storico"], start=1):
+                st.markdown(f"**{idx}. {s['scelta']}** (`{s['colore'].upper()}`) - {s['razionale']}")
+
+with tab_val:
+    st.markdown("### Verifica Strutturale & Regole Peppiniello")
+    for stato, msg in valida_regole_peppiniello(caso):
+        if stato == "ok":
+            st.success(msg)
+        elif stato == "warn":
+            st.warning(msg)
+        else:
+            st.error(msg)
+
+with tab_edit:
+    st.markdown("### Modifica Rapida Titolo e Anamnesi T0")
+    meta = caso.setdefault("meta", {})
+    p0 = caso.setdefault("paziente_t0", {})
+    col_m1, col_m2 = st.columns(2)
+    meta["case_id"] = col_m1.text_input("ID Caso", value=meta.get("case_id", ""))
+    meta["titolo"] = col_m2.text_input("Titolo Interno", value=meta.get("titolo", ""))
+    p0["scheda_paziente"] = st.text_area(
+        "Anamnesi & Quadro T0", value=p0.get("scheda_paziente", ""), height=160
+    )
+    if st.button("Salva modifiche T0"):
+        st.session_state["caso_attivo"] = caso
+        st.success("Anamnesi aggiornata!")
